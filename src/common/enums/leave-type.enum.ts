@@ -1,0 +1,15 @@
+export enum LeaveType {
+  ANNUAL = 'ANNUAL',
+  CASUAL = 'CASUAL',
+  SICK = 'SICK',
+  MATERNITY = 'MATERNITY',
+  PATERNITY = 'PATERNITY',
+  LOSS_OF_PAY = 'LOSS_OF_PAY',
+}
+
+export enum LeaveStatus {
+  PENDING = 'PENDING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  CANCELLED = 'CANCELLED',
+}

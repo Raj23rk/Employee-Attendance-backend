@@ -114,6 +114,8 @@ export class AttendanceService {
         id: record._id,
         date: record.date,
         checkInTime: record.checkInTime,
+        rawCheckInTime: record.checkInTime,
+        startedAt: new Date(record.checkInTime).getTime(),
         formattedTime: this.formatTime(record.checkInTime),
         status: record.status,
       },
@@ -140,13 +142,20 @@ export class AttendanceService {
     if (dto.notes) record.notes = (record.notes ? record.notes + ' | ' : '') + dto.notes;
     if (ipAddress) record.ipAddress = ipAddress;
 
+    // Calculate working minutes
     const diffMs = now.getTime() - new Date(record.checkInTime).getTime();
     const totalMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    const breakMinutes = record.breakMinutes || 60;
-    const workingMinutes = Math.max(0, totalMinutes - breakMinutes);
-
+    const workingMinutes = Math.max(0, totalMinutes - (record.breakMinutes || 60));
     record.totalWorkingMinutes = workingMinutes;
-    if (workingMinutes < 240) {
+
+    // Evaluate half day vs full day based on policy
+    const policy = await this.policyModel.findOne({ isActive: true });
+    const fullDayThreshold = policy?.fullDayThresholdMinutes || 480;
+    const halfDayThreshold = policy?.halfDayThresholdMinutes || 240;
+
+    if (workingMinutes < halfDayThreshold) {
+      record.status = AttendanceStatus.ABSENT;
+    } else if (workingMinutes < fullDayThreshold) {
       record.status = AttendanceStatus.HALF_DAY;
     } else {
       record.status = AttendanceStatus.PRESENT;
@@ -164,6 +173,7 @@ export class AttendanceService {
       data: {
         id: record._id,
         checkOutTime: record.checkOutTime,
+        rawCheckOutTime: record.checkOutTime,
         formattedTime: this.formatTime(record.checkOutTime),
         totalWorkingMinutes: workingMinutes,
         workingHours: workingHoursFormatted,
@@ -181,31 +191,51 @@ export class AttendanceService {
 
     if (!record || !record.checkInTime) {
       return {
+        success: true,
         checkedIn: false,
+        isCheckedIn: false,
         checkInTime: null,
         checkOutTime: null,
+        rawCheckInTime: null,
+        rawCheckOutTime: null,
+        startedAt: null,
         break: '01:00',
         workingHours: '00:00',
+        elapsed: '00:00:00',
+        elapsedFormatted: '00:00:00',
         status: record ? record.status : AttendanceStatus.ABSENT,
       };
     }
 
-    const endTime = record.checkOutTime ? new Date(record.checkOutTime) : new Date();
-    const diffMs = endTime.getTime() - new Date(record.checkInTime).getTime();
-    const totalMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    const workingMinutes = Math.max(0, totalMinutes - (record.breakMinutes || 60));
-
-    const hrs = Math.floor(workingMinutes / 60);
-    const mins = workingMinutes % 60;
-    const workingHoursFormatted = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+    const isCheckedOut = !!record.checkOutTime;
+    const endTime = isCheckedOut ? new Date(record.checkOutTime) : new Date();
+    const diffMs = Math.max(0, endTime.getTime() - new Date(record.checkInTime).getTime());
+    const totalSeconds = Math.floor(diffMs / 1000);
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    const elapsedFormatted = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    const elapsedMinutes = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 
     return {
-      checkedIn: true,
+      success: true,
+      checkedIn: !isCheckedOut,
+      isCheckedIn: !isCheckedOut,
       checkInTime: this.formatTime(record.checkInTime),
       checkOutTime: this.formatTime(record.checkOutTime),
+      rawCheckInTime: record.checkInTime,
+      rawCheckOutTime: record.checkOutTime,
+      startedAt: new Date(record.checkInTime).getTime(),
       break: '01:00',
-      workingHours: workingHoursFormatted,
+      workingHours: elapsedMinutes,
+      elapsed: elapsedFormatted,
+      elapsedFormatted,
       status: record.status,
+      record: {
+        id: record._id,
+        checkInTime: record.checkInTime,
+        checkOutTime: record.checkOutTime,
+      },
     };
   }
 

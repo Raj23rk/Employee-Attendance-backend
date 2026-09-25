@@ -56,7 +56,8 @@ async function bootstrap() {
   logger.log(`🚀 Employee Attendance Backend running on port ${port}`);
   logger.log(`📚 Swagger API Docs: http://localhost:${port}/api/docs`);
   logger.log(`🔐 Seed Login Credentials (Password: Password@123):`);
-  logger.log(`   - CEO:      ceo@wegrow.edu.in`);
+  logger.log(`   - Admin:    admin@wegrow.edu.in`);
+  logger.log(`   - CEO:      ceo@wegrow.edu.in / rajkumar@wegrow.edu.in`);
   logger.log(`   - HR:       hr@wegrow.edu.in`);
   logger.log(`   - Manager:  manager@wegrow.edu.in`);
   logger.log(`   - Female:   priya.sharma@wegrow.edu.in (Maternity eligible)`);

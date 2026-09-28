@@ -1,12 +1,13 @@
-import { Module } from '@nestjs/common';
+import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { APP_GUARD } from '@nestjs/core';
 import configuration from './config/configuration';
 
-// Common Guards
+// Common Guards & Middleware
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { NoCacheMiddleware } from './common/middleware/no-cache.middleware';
 
 // Application Modules
 import { AuthModule } from './modules/auth/auth.module';
@@ -73,4 +74,9 @@ import { SeedModule } from './modules/seed/seed.module';
     },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(NoCacheMiddleware).forRoutes('*');
+  }
+}
+

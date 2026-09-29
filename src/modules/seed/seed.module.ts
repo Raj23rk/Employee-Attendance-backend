@@ -7,6 +7,7 @@ import {
   NotificationTemplateSchema,
 } from '../notifications/schemas/notification-template.schema';
 import { Department, DepartmentSchema } from '../organization/schemas/department.schema';
+import { Branch, BranchSchema } from '../organization/schemas/branch.schema';
 import { Holiday, HolidaySchema } from '../dashboard/schemas/holiday.schema';
 import {
   AttendancePolicy,
@@ -22,6 +23,7 @@ import { SeedService } from './seed.service';
       { name: LeaveBalance.name, schema: LeaveBalanceSchema },
       { name: NotificationTemplate.name, schema: NotificationTemplateSchema },
       { name: Department.name, schema: DepartmentSchema },
+      { name: Branch.name, schema: BranchSchema },
       { name: Holiday.name, schema: HolidaySchema },
       { name: AttendancePolicy.name, schema: AttendancePolicySchema },
       { name: Attendance.name, schema: AttendanceSchema },

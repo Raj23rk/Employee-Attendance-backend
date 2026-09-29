@@ -9,6 +9,8 @@ import {
   AttendancePolicy,
   AttendancePolicySchema,
 } from './schemas/attendance-policy.schema';
+import { Permission, PermissionSchema } from './schemas/permission.schema';
+import { Branch, BranchSchema } from '../organization/schemas/branch.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { AttendanceService } from './attendance.service';
 import { AttendanceController } from './attendance.controller';
@@ -20,6 +22,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: Attendance.name, schema: AttendanceSchema },
       { name: AttendanceCorrection.name, schema: AttendanceCorrectionSchema },
       { name: AttendancePolicy.name, schema: AttendancePolicySchema },
+      { name: Permission.name, schema: PermissionSchema },
+      { name: Branch.name, schema: BranchSchema },
       { name: User.name, schema: UserSchema },
     ]),
     NotificationsModule,

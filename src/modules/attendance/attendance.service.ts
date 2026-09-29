@@ -14,6 +14,12 @@ import {
   AttendancePolicy,
   AttendancePolicyDocument,
 } from './schemas/attendance-policy.schema';
+import {
+  Permission,
+  PermissionDocument,
+  PermissionStatus,
+} from './schemas/permission.schema';
+import { Branch, BranchDocument } from '../organization/schemas/branch.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
   CheckInDto,
@@ -23,6 +29,8 @@ import {
   HrAdjustAttendanceDto,
   SyncBiometricDto,
   UpdatePolicyDto,
+  ApplyPermissionDto,
+  ReviewPermissionDto,
 } from './dto/attendance.dto';
 import {
   AttendanceStatus,
@@ -31,6 +39,20 @@ import {
 } from '../../common/enums/attendance-status.enum';
 import { Role } from '../../common/enums/role.enum';
 import { NotificationsService } from '../notifications/notifications.service';
+
+function calculateDistanceInMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000; // Radius of the Earth in meters
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
+}
 
 @Injectable()
 export class AttendanceService {
@@ -41,6 +63,10 @@ export class AttendanceService {
     private correctionModel: Model<AttendanceCorrectionDocument>,
     @InjectModel(AttendancePolicy.name)
     private policyModel: Model<AttendancePolicyDocument>,
+    @InjectModel(Permission.name)
+    private permissionModel: Model<PermissionDocument>,
+    @InjectModel(Branch.name)
+    private branchModel: Model<BranchDocument>,
     @InjectModel(User.name)
     private userModel: Model<UserDocument>,
     private notificationsService: NotificationsService,
@@ -60,10 +86,65 @@ export class AttendanceService {
     });
   }
 
-  // 1. PUNCH IN
+  // Helper: Find Nearest Branch & Check Geofence
+  private async resolveLocationAndBranch(
+    latitude?: number,
+    longitude?: number,
+    userBranchName?: string,
+    providedAddress?: string,
+  ) {
+    const branches = await this.branchModel.find({ isActive: true }).exec();
+    if (!latitude || !longitude || branches.length === 0) {
+      return {
+        latitude: latitude || null,
+        longitude: longitude || null,
+        address: providedAddress || 'Office Premises',
+        branch: userBranchName || 'Chennai Main Campus',
+        distanceMeters: 0,
+        isWithinOfficeRadius: true,
+      };
+    }
+
+    // Find nearest branch
+    let nearestBranch = branches[0];
+    let minDistance = calculateDistanceInMeters(
+      latitude,
+      longitude,
+      nearestBranch.latitude,
+      nearestBranch.longitude,
+    );
+
+    for (let i = 1; i < branches.length; i++) {
+      const b = branches[i];
+      const dist = calculateDistanceInMeters(latitude, longitude, b.latitude, b.longitude);
+      if (dist < minDistance) {
+        minDistance = dist;
+        nearestBranch = b;
+      }
+    }
+
+    const radius = nearestBranch.radiusMeters || 500;
+    const isWithinOfficeRadius = minDistance <= radius;
+    const address = providedAddress || `${nearestBranch.name} (${nearestBranch.city})`;
+
+    return {
+      latitude,
+      longitude,
+      address,
+      branch: nearestBranch.name,
+      branchId: nearestBranch._id,
+      distanceMeters: minDistance,
+      isWithinOfficeRadius,
+    };
+  }
+
+  // 1. PUNCH IN (Location-based + 9:40 / 9:45 Grace + 3 Allowed Late / 4th Half-Day)
   async checkIn(userId: string, dto: CheckInDto, ipAddress: string = '') {
     const today = this.getTodayString();
     const now = new Date();
+
+    const user = await this.userModel.findById(userId);
+    const userBranchName = user?.branch || 'Chennai Main Campus';
 
     let record = await this.attendanceModel.findOne({
       userId: new Types.ObjectId(userId),
@@ -80,8 +161,84 @@ export class AttendanceService {
           checkInTime: record.checkInTime,
           formattedTime: this.formatTime(record.checkInTime),
           status: record.status,
+          isLate: record.isLate,
+          lateMinutes: record.lateMinutes,
+          isLatePenaltyApplied: record.isLatePenaltyApplied,
+          branchName: record.branchName,
+          checkInLocation: record.checkInLocation,
         },
       };
+    }
+
+    // Geolocation Resolution
+    const locationData = await this.resolveLocationAndBranch(
+      dto.latitude,
+      dto.longitude,
+      dto.branch || userBranchName,
+      dto.locationAddress,
+    );
+
+    // Fetch Attendance Policy (Standard: 09:40 AM Start, 09:45 AM Grace, 19:00 PM End)
+    let policy = await this.policyModel.findOne({ isActive: true });
+    if (!policy) {
+      policy = await this.policyModel.create({
+        policyName: 'Standard Shift Policy',
+        workStartTime: '09:40',
+        graceTime: '09:45',
+        workEndTime: '19:00',
+        gracePeriodMinutes: 5,
+        allowedLateCheckins: 3,
+        maxMonthlyPermissionHours: 2,
+        halfDayThresholdMinutes: 270,
+        fullDayThresholdMinutes: 500,
+      });
+    }
+
+    // Evaluate Late Arrival (Past 09:40 AM)
+    // Convert current time to today's HH:mm
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+    const [startH, startM] = (policy.workStartTime || '09:40').split(':').map(Number);
+    const shiftStartTotalMinutes = (startH || 9) * 60 + (startM || 40); // 580 minutes = 9:40 AM
+
+    const [graceH, graceM] = (policy.graceTime || '09:45').split(':').map(Number);
+    const graceTotalMinutes = (graceH || 9) * 60 + (graceM || 45); // 585 minutes = 9:45 AM
+
+    let isLate = false;
+    let lateMinutes = 0;
+    let isLatePenaltyApplied = false;
+    let latePenaltyType = 'NONE';
+    let status = AttendanceStatus.PRESENT;
+    let lateCountThisMonth = 0;
+
+    if (currentTotalMinutes > shiftStartTotalMinutes) {
+      isLate = true;
+      lateMinutes = currentTotalMinutes - shiftStartTotalMinutes;
+
+      // Count late arrivals for this user in current calendar month
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth() + 1;
+      const monthStartStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+      const monthEndStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+
+      const previousLateCount = await this.attendanceModel.countDocuments({
+        userId: new Types.ObjectId(userId),
+        date: { $gte: monthStartStr, $lte: monthEndStr, $ne: today },
+        isLate: true,
+      });
+
+      lateCountThisMonth = previousLateCount + 1;
+
+      // Rule: Up to 3 late check-ins allowed (grace / warning).
+      // 4th late check-in and onward -> Half-day salary deducted.
+      const allowedLate = policy.allowedLateCheckins || 3;
+      if (lateCountThisMonth > allowedLate) {
+        isLatePenaltyApplied = true;
+        latePenaltyType = 'HALF_DAY_DEDUCTION';
+        status = AttendanceStatus.HALF_DAY; // Automatically marked as half-day due to 4th late check-in
+      }
     }
 
     if (!record) {
@@ -89,19 +246,38 @@ export class AttendanceService {
         userId: new Types.ObjectId(userId),
         date: today,
         checkInTime: now,
-        status: AttendanceStatus.PRESENT,
+        status,
         source: AttendanceSource.WEB,
         latitude: dto.latitude,
         longitude: dto.longitude,
-        notes: dto.notes,
+        locationAddress: locationData.address,
+        branchName: locationData.branch,
+        branchId: locationData.branchId as any,
+        checkInLocation: locationData,
+        isLate,
+        lateMinutes,
+        lateCountThisMonth,
+        isLatePenaltyApplied,
+        latePenaltyType,
+        notes: dto.notes || (isLatePenaltyApplied ? '4th Late check-in this month: Half-Day salary deduction applied' : isLate ? `Late check-in (${lateCountThisMonth}/${policy.allowedLateCheckins || 3} allowed grace)` : 'On-time check-in'),
         ipAddress,
       });
     } else {
       record.checkInTime = now;
-      record.status = AttendanceStatus.PRESENT;
+      record.status = status;
       record.latitude = dto.latitude;
       record.longitude = dto.longitude;
-      record.notes = dto.notes;
+      record.locationAddress = locationData.address;
+      record.branchName = locationData.branch;
+      record.branchId = locationData.branchId as any;
+      record.checkInLocation = locationData;
+
+      record.isLate = isLate;
+      record.lateMinutes = lateMinutes;
+      record.lateCountThisMonth = lateCountThisMonth;
+      record.isLatePenaltyApplied = isLatePenaltyApplied;
+      record.latePenaltyType = latePenaltyType;
+      record.notes = dto.notes || record.notes;
       record.ipAddress = ipAddress;
     }
 
@@ -109,7 +285,11 @@ export class AttendanceService {
 
     return {
       success: true,
-      message: 'Check-in successful',
+      message: isLatePenaltyApplied
+        ? `Checked in at ${this.formatTime(now)}. Note: 4th late arrival this month. Half-day salary deduction applied.`
+        : isLate
+          ? `Checked in at ${this.formatTime(now)} (Late arrival ${lateCountThisMonth}/3 allowed grace check-ins).`
+          : `Check-in successful at ${this.formatTime(now)}.`,
       data: {
         id: record._id,
         date: record.date,
@@ -118,11 +298,17 @@ export class AttendanceService {
         startedAt: new Date(record.checkInTime).getTime(),
         formattedTime: this.formatTime(record.checkInTime),
         status: record.status,
+        isLate: record.isLate,
+        lateMinutes: record.lateMinutes,
+        lateCountThisMonth: record.lateCountThisMonth,
+        isLatePenaltyApplied: record.isLatePenaltyApplied,
+        branchName: record.branchName,
+        checkInLocation: record.checkInLocation,
       },
     };
   }
 
-  // 2. PUNCH OUT
+  // 2. PUNCH OUT (Location-based + 7:00 PM Check-Out Target)
   async checkOut(userId: string, dto: CheckOutDto, ipAddress: string = '') {
     const today = this.getTodayString();
     const now = new Date();
@@ -136,7 +322,19 @@ export class AttendanceService {
       throw new BadRequestException('Cannot check out before checking in today');
     }
 
+    const user = await this.userModel.findById(userId);
+    const userBranchName = user?.branch || record.branchName || 'Chennai Main Campus';
+
+    // Resolve Check-out Location
+    const checkOutLocationData = await this.resolveLocationAndBranch(
+      dto.latitude,
+      dto.longitude,
+      dto.branch || userBranchName,
+      dto.locationAddress,
+    );
+
     record.checkOutTime = now;
+    record.checkOutLocation = checkOutLocationData;
     if (dto.latitude) record.latitude = dto.latitude;
     if (dto.longitude) record.longitude = dto.longitude;
     if (dto.notes) record.notes = (record.notes ? record.notes + ' | ' : '') + dto.notes;
@@ -148,17 +346,19 @@ export class AttendanceService {
     const workingMinutes = Math.max(0, totalMinutes - (record.breakMinutes || 60));
     record.totalWorkingMinutes = workingMinutes;
 
-    // Evaluate half day vs full day based on policy
+    // Evaluate half day vs full day based on policy unless already marked as half-day from late penalty
     const policy = await this.policyModel.findOne({ isActive: true });
-    const fullDayThreshold = policy?.fullDayThresholdMinutes || 480;
-    const halfDayThreshold = policy?.halfDayThresholdMinutes || 240;
+    const fullDayThreshold = policy?.fullDayThresholdMinutes || 500;
+    const halfDayThreshold = policy?.halfDayThresholdMinutes || 270;
 
-    if (workingMinutes < halfDayThreshold) {
-      record.status = AttendanceStatus.ABSENT;
-    } else if (workingMinutes < fullDayThreshold) {
-      record.status = AttendanceStatus.HALF_DAY;
-    } else {
-      record.status = AttendanceStatus.PRESENT;
+    if (!record.isLatePenaltyApplied) {
+      if (workingMinutes < halfDayThreshold) {
+        record.status = AttendanceStatus.ABSENT;
+      } else if (workingMinutes < fullDayThreshold) {
+        record.status = AttendanceStatus.HALF_DAY;
+      } else {
+        record.status = AttendanceStatus.PRESENT;
+      }
     }
 
     await record.save();
@@ -169,7 +369,7 @@ export class AttendanceService {
 
     return {
       success: true,
-      message: 'Check-out recorded',
+      message: 'Check-out recorded successfully',
       data: {
         id: record._id,
         checkOutTime: record.checkOutTime,
@@ -177,6 +377,8 @@ export class AttendanceService {
         formattedTime: this.formatTime(record.checkOutTime),
         totalWorkingMinutes: workingMinutes,
         workingHours: workingHoursFormatted,
+        checkOutLocation: record.checkOutLocation,
+        status: record.status,
       },
     };
   }
@@ -188,6 +390,23 @@ export class AttendanceService {
       userId: new Types.ObjectId(userId),
       date: today,
     });
+
+    const policy = await this.getPolicies();
+    const shiftPolicy = policy.data;
+
+    // Check user's monthly permission hours used
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+
+    const monthlyPermissions = await this.permissionModel.find({
+      userId: new Types.ObjectId(userId),
+      date: { $gte: startStr, $lte: endStr },
+      status: { $in: [PermissionStatus.APPROVED, PermissionStatus.PENDING] },
+    });
+
+    const usedPermissionHours = monthlyPermissions.reduce((acc, p) => acc + p.durationHours, 0);
 
     if (!record || !record.checkInTime) {
       return {
@@ -204,6 +423,16 @@ export class AttendanceService {
         elapsed: '00:00:00',
         elapsedFormatted: '00:00:00',
         status: record ? record.status : AttendanceStatus.ABSENT,
+        shiftDetails: {
+          startTime: shiftPolicy?.workStartTime || '09:40 AM',
+          graceTime: shiftPolicy?.graceTime || '09:45 AM',
+          endTime: shiftPolicy?.workEndTime || '07:00 PM',
+        },
+        permissionQuota: {
+          allowedMonthlyHours: shiftPolicy?.maxMonthlyPermissionHours || 2,
+          usedMonthlyHours: usedPermissionHours,
+          remainingHours: Math.max(0, (shiftPolicy?.maxMonthlyPermissionHours || 2) - usedPermissionHours),
+        },
       };
     }
 
@@ -231,6 +460,23 @@ export class AttendanceService {
       elapsed: elapsedFormatted,
       elapsedFormatted,
       status: record.status,
+      isLate: record.isLate,
+      lateMinutes: record.lateMinutes,
+      lateCountThisMonth: record.lateCountThisMonth,
+      isLatePenaltyApplied: record.isLatePenaltyApplied,
+      branchName: record.branchName,
+      checkInLocation: record.checkInLocation,
+      checkOutLocation: record.checkOutLocation,
+      shiftDetails: {
+        startTime: shiftPolicy?.workStartTime || '09:40 AM',
+        graceTime: shiftPolicy?.graceTime || '09:45 AM',
+        endTime: shiftPolicy?.workEndTime || '07:00 PM',
+      },
+      permissionQuota: {
+        allowedMonthlyHours: shiftPolicy?.maxMonthlyPermissionHours || 2,
+        usedMonthlyHours: usedPermissionHours,
+        remainingHours: Math.max(0, (shiftPolicy?.maxMonthlyPermissionHours || 2) - usedPermissionHours),
+      },
       record: {
         id: record._id,
         checkInTime: record.checkInTime,
@@ -243,7 +489,7 @@ export class AttendanceService {
   async getMyCalendar(userId: string, month?: number, year?: number) {
     const targetDate = new Date();
     const targetYear = year || targetDate.getFullYear();
-    const targetMonth = month || targetDate.getMonth() + 1; // 1-indexed
+    const targetMonth = month || targetDate.getMonth() + 1;
 
     const startStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
     const lastDayNum = new Date(targetYear, targetMonth, 0).getDate();
@@ -267,6 +513,8 @@ export class AttendanceService {
     let halfDays = 0;
     let holidays = 0;
     let weekOffs = 0;
+    let lateDays = 0;
+    let latePenaltyHalfDays = 0;
     let totalWorkingMinutes = 0;
 
     for (let day = 1; day <= lastDayNum; day++) {
@@ -278,12 +526,18 @@ export class AttendanceService {
       let status: string = isWeekend ? AttendanceStatus.WEEK_OFF : AttendanceStatus.ABSENT;
       let checkInFormatted = null;
       let checkOutFormatted = null;
+      let isLate = false;
+      let isLatePenaltyApplied = false;
 
       if (dateStr === todayStr) {
         status = 'TODAY';
         if (record && record.checkInTime) {
           checkInFormatted = this.formatTime(record.checkInTime);
           checkOutFormatted = this.formatTime(record.checkOutTime);
+          isLate = record.isLate;
+          isLatePenaltyApplied = record.isLatePenaltyApplied;
+          if (record.isLate) lateDays++;
+          if (record.isLatePenaltyApplied) latePenaltyHalfDays++;
           presentDays++;
           totalWorkingMinutes += record.totalWorkingMinutes || 0;
         }
@@ -291,6 +545,11 @@ export class AttendanceService {
         status = record.status;
         checkInFormatted = this.formatTime(record.checkInTime);
         checkOutFormatted = this.formatTime(record.checkOutTime);
+        isLate = record.isLate;
+        isLatePenaltyApplied = record.isLatePenaltyApplied;
+
+        if (record.isLate) lateDays++;
+        if (record.isLatePenaltyApplied) latePenaltyHalfDays++;
 
         if (record.status === AttendanceStatus.PRESENT) presentDays++;
         else if (record.status === AttendanceStatus.WFH) wfhDays++;
@@ -310,12 +569,22 @@ export class AttendanceService {
         status,
         in: checkInFormatted,
         out: checkOutFormatted,
+        isLate,
+        isLatePenaltyApplied,
+        branch: record?.branchName || 'Chennai Main Campus',
       });
     }
 
     const hrs = Math.floor(totalWorkingMinutes / 60);
     const mins = totalWorkingMinutes % 60;
     const totalWorkingHours = `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+
+    // Permissions in this month
+    const permissions = await this.permissionModel.find({
+      userId: new Types.ObjectId(userId),
+      date: { $gte: startStr, $lte: endStr },
+    });
+    const permissionHoursUsed = permissions.reduce((acc, p) => acc + p.durationHours, 0);
 
     return {
       success: true,
@@ -326,13 +595,196 @@ export class AttendanceService {
         halfDays,
         holidays,
         weekOffs,
+        lateDays,
+        latePenaltyHalfDays,
+        permissionHoursUsed,
         totalWorkingHours,
       },
       days,
     };
   }
 
-  // 5. SUBMIT CORRECTION REQUEST
+  // 5. MONTHLY PERMISSION SYSTEM (2 Hours Allowed per month, excess triggers half day deduction)
+  async applyPermission(userId: string, dto: ApplyPermissionDto) {
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const permDate = new Date(dto.date);
+    const targetYear = permDate.getFullYear();
+    const targetMonth = permDate.getMonth() + 1;
+    const startStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
+    const endStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-31`;
+
+    // Calculate total hours already requested / approved this month
+    const existingPerms = await this.permissionModel.find({
+      userId: new Types.ObjectId(userId),
+      date: { $gte: startStr, $lte: endStr },
+      status: { $in: [PermissionStatus.APPROVED, PermissionStatus.PENDING] },
+    });
+
+    const previousHours = existingPerms.reduce((acc, p) => acc + p.durationHours, 0);
+    const totalRequestedHours = previousHours + dto.durationHours;
+
+    let exceedsMonthlyLimit = false;
+    let isSalaryDeductionApplied = false;
+    let halfDayDeductionCount = 0;
+
+    // Rule: Up to 2.0 hours permission per month allowed.
+    // Over 2 hours -> half day salary deduction
+    if (totalRequestedHours > 2.0) {
+      exceedsMonthlyLimit = true;
+      isSalaryDeductionApplied = true;
+      halfDayDeductionCount = 1;
+    }
+
+    const permission = await this.permissionModel.create({
+      userId: new Types.ObjectId(userId),
+      date: dto.date,
+      startTime: dto.startTime,
+      endTime: dto.endTime,
+      durationHours: dto.durationHours,
+      durationMinutes: Math.round(dto.durationHours * 60),
+      reason: dto.reason,
+      status: PermissionStatus.PENDING,
+      exceedsMonthlyLimit,
+      isSalaryDeductionApplied,
+      halfDayDeductionCount,
+    });
+
+    // Notify manager
+    if (user.managerId) {
+      const manager = await this.userModel.findById(user.managerId);
+      if (manager) {
+        await this.notificationsService.createInAppNotification(
+          manager._id.toString(),
+          'Permission Request Received',
+          `${user.name} applied for ${dto.durationHours} hr(s) permission on ${dto.date} (${exceedsMonthlyLimit ? 'Exceeds 2hr monthly limit: Half-day deduction' : 'Within 2hr limit'}).`,
+          'INFO',
+          '/attendance/permissions',
+        );
+      }
+    }
+
+    return {
+      success: true,
+      message: exceedsMonthlyLimit
+        ? `Permission applied. Note: Total monthly permission (${totalRequestedHours} hrs) exceeds 2-hour monthly limit. Half-day salary deduction will apply upon approval.`
+        : `Permission applied successfully (${totalRequestedHours}/2 hrs used this month).`,
+      data: permission,
+    };
+  }
+
+  async getMyPermissions(userId: string, month?: number, year?: number) {
+    const targetDate = new Date();
+    const y = year || targetDate.getFullYear();
+    const m = month || targetDate.getMonth() + 1;
+    const startStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    const endStr = `${y}-${String(m).padStart(2, '0')}-31`;
+
+    const list = await this.permissionModel
+      .find({
+        userId: new Types.ObjectId(userId),
+        date: { $gte: startStr, $lte: endStr },
+      })
+      .populate('reviewedBy', 'name email role')
+      .sort({ date: -1 })
+      .exec();
+
+    const usedHours = list
+      .filter((p) => p.status === PermissionStatus.APPROVED || p.status === PermissionStatus.PENDING)
+      .reduce((acc, p) => acc + p.durationHours, 0);
+
+    return {
+      success: true,
+      month: m,
+      year: y,
+      quota: {
+        allowedHours: 2.0,
+        usedHours,
+        remainingHours: Math.max(0, 2.0 - usedHours),
+        exceeded: usedHours > 2.0,
+      },
+      count: list.length,
+      data: list,
+    };
+  }
+
+  async getTeamPermissions(reviewerId: string, role: Role, branch?: string, statusFilter?: string) {
+    const filter: any = {};
+    if (statusFilter && statusFilter !== 'ALL') {
+      filter.status = statusFilter;
+    }
+
+    if (role === Role.MANAGER) {
+      const reportees = await this.userModel.find({
+        managerId: new Types.ObjectId(reviewerId),
+      }).select('_id');
+      const reporteeIds = reportees.map((r) => r._id);
+      filter.userId = { $in: reporteeIds };
+    }
+
+    const list = await this.permissionModel
+      .find(filter)
+      .populate('userId', 'name employeeId email department branch designation')
+      .populate('reviewedBy', 'name email')
+      .sort({ createdAt: -1 })
+      .exec();
+
+    let filtered = list;
+    if (branch && branch !== 'ALL') {
+      filtered = list.filter((p: any) => p.userId?.branch === branch);
+    }
+
+    return { success: true, count: filtered.length, data: filtered };
+  }
+
+  async reviewPermission(permissionId: string, reviewerId: string, dto: ReviewPermissionDto) {
+    const permission = await this.permissionModel.findById(permissionId);
+    if (!permission) {
+      throw new NotFoundException('Permission request not found');
+    }
+
+    permission.status = dto.action === 'APPROVE' ? PermissionStatus.APPROVED : PermissionStatus.REJECTED;
+    permission.reviewedBy = new Types.ObjectId(reviewerId) as any;
+    permission.reviewRemarks = dto.remarks || '';
+
+    permission.reviewedAt = new Date();
+    await permission.save();
+
+    // If approved and exceeds limit, mark attendance record on that date with half-day penalty
+    if (dto.action === 'APPROVE' && permission.isSalaryDeductionApplied) {
+      const att = await this.attendanceModel.findOne({
+        userId: permission.userId,
+        date: permission.date,
+      });
+      if (att) {
+        att.status = AttendanceStatus.HALF_DAY;
+        att.notes = (att.notes ? att.notes + ' | ' : '') + 'Permission exceeded 2-hour monthly limit: Half-day salary deducted';
+        await att.save();
+      }
+    }
+
+    const applicant = await this.userModel.findById(permission.userId);
+    if (applicant) {
+      await this.notificationsService.createInAppNotification(
+        applicant._id.toString(),
+        `Permission Request ${dto.action}`,
+        `Your permission request for ${permission.date} (${permission.durationHours} hrs) was ${dto.action.toLowerCase()}d.`,
+        dto.action === 'APPROVE' ? 'SUCCESS' : 'WARNING',
+        '/attendance/permissions',
+      );
+    }
+
+    return {
+      success: true,
+      message: `Permission request ${dto.action.toLowerCase()}d successfully`,
+      data: permission,
+    };
+  }
+
+  // 6. SUBMIT CORRECTION REQUEST
   async submitCorrection(userId: string, dto: CorrectionRequestDto) {
     const existing = await this.correctionModel.findOne({
       userId: new Types.ObjectId(userId),
@@ -353,8 +805,8 @@ export class AttendanceService {
       userId: new Types.ObjectId(userId),
       attendanceId: attendance ? attendance._id : null,
       targetDate: dto.targetDate,
-      requestedCheckIn: dto.requestedCheckIn || '09:00 AM',
-      requestedCheckOut: dto.requestedCheckOut || '06:00 PM',
+      requestedCheckIn: dto.requestedCheckIn || '09:40 AM',
+      requestedCheckOut: dto.requestedCheckOut || '07:00 PM',
       reason: dto.reason,
       attachmentUrl: dto.attachmentUrl || '',
       status: CorrectionStatus.PENDING,
@@ -367,7 +819,7 @@ export class AttendanceService {
     };
   }
 
-  // 6. MY CORRECTIONS
+  // 7. MY CORRECTIONS
   async getMyCorrections(userId: string) {
     const list = await this.correctionModel
       .find({ userId: new Types.ObjectId(userId) })
@@ -377,18 +829,21 @@ export class AttendanceService {
     return { success: true, data: list };
   }
 
-  // 7. MANAGER: TEAM ATTENDANCE TODAY
-  async getTeamToday(managerId: string, role: Role) {
+  // 8. MANAGER: TEAM ATTENDANCE TODAY
+  async getTeamToday(managerId: string, role: Role, branch?: string) {
     const today = this.getTodayString();
     let userFilter: any = { isActive: true };
 
     if (role === Role.MANAGER) {
       userFilter.managerId = new Types.ObjectId(managerId);
     }
+    if (branch && branch !== 'ALL') {
+      userFilter.branch = branch;
+    }
 
     const teamMembers = await this.userModel
       .find(userFilter)
-      .select('name employeeId email role department')
+      .select('name employeeId email role department branch designation dateOfJoining')
       .exec();
 
     const memberIds = teamMembers.map((m) => m._id);
@@ -406,12 +861,15 @@ export class AttendanceService {
     let wfh = 0;
     let onLeave = 0;
     let absent = 0;
+    let late = 0;
 
     const members = teamMembers.map((m) => {
       const record = recordMap.get(m._id.toString());
       let status = record ? record.status : AttendanceStatus.ABSENT;
       let checkInFormatted = record && record.checkInTime ? this.formatTime(record.checkInTime) : null;
+      let checkOutFormatted = record && record.checkOutTime ? this.formatTime(record.checkOutTime) : null;
 
+      if (record && record.isLate) late++;
       if (status === AttendanceStatus.PRESENT) present++;
       else if (status === AttendanceStatus.WFH) wfh++;
       else if (status === AttendanceStatus.LEAVE) onLeave++;
@@ -423,7 +881,14 @@ export class AttendanceService {
         employeeId: m.employeeId,
         role: m.role,
         department: m.department,
+        branch: m.branch || 'Chennai Main Campus',
+        designation: m.designation,
+        dateOfJoining: m.dateOfJoining,
         checkInTime: checkInFormatted,
+        checkOutTime: checkOutFormatted,
+        isLate: record?.isLate || false,
+        isLatePenaltyApplied: record?.isLatePenaltyApplied || false,
+        locationAddress: record?.locationAddress || '',
         status,
       };
     });
@@ -435,15 +900,16 @@ export class AttendanceService {
       wfh,
       onLeave,
       absent,
+      late,
       members,
     };
   }
 
-  // 8. MANAGER: TEAM MONTHLY REPORT
+  // 9. MANAGER: TEAM MONTHLY REPORT
   async getTeamMonthly(managerId: string, month?: number, year?: number) {
     const teamMembers = await this.userModel
       .find({ managerId: new Types.ObjectId(managerId), isActive: true })
-      .select('name employeeId department')
+      .select('name employeeId department branch dateOfJoining')
       .exec();
 
     const targetDate = new Date();
@@ -466,25 +932,29 @@ export class AttendanceService {
       const presentCount = userRecords.filter((r) => r.status === AttendanceStatus.PRESENT).length;
       const wfhCount = userRecords.filter((r) => r.status === AttendanceStatus.WFH).length;
       const leaveCount = userRecords.filter((r) => r.status === AttendanceStatus.LEAVE).length;
+      const lateCount = userRecords.filter((r) => r.isLate).length;
 
       return {
         id: tm._id,
         name: tm.name,
         employeeId: tm.employeeId,
         department: tm.department,
+        branch: (tm as any).branch || 'Chennai Main Campus',
+        dateOfJoining: (tm as any).dateOfJoining,
         presentDays: presentCount,
         wfhDays: wfhCount,
         leaveDays: leaveCount,
+        lateDays: lateCount,
       };
     });
 
     return { success: true, month: m, year: y, count: teamMembers.length, data: summary };
   }
 
-  // 9. MANAGER / HR: PENDING CORRECTIONS
+  // 10. MANAGER / HR: PENDING CORRECTIONS
   async getPendingCorrections(reviewerId: string, role: Role, statusFilter?: string) {
     const filter: any = {};
-    if (statusFilter) {
+    if (statusFilter && statusFilter !== 'ALL') {
       filter.status = statusFilter;
     }
 
@@ -498,14 +968,14 @@ export class AttendanceService {
 
     const list = await this.correctionModel
       .find(filter)
-      .populate('userId', 'name employeeId email department')
+      .populate('userId', 'name employeeId email department branch designation')
       .sort({ createdAt: -1 })
       .exec();
 
     return { success: true, count: list.length, data: list };
   }
 
-  // 10. APPROVE / REJECT CORRECTION
+  // 11. APPROVE / REJECT CORRECTION
   async reviewCorrection(
     correctionId: string,
     reviewerId: string,
@@ -522,7 +992,6 @@ export class AttendanceService {
     correction.reviewedAt = new Date();
     await correction.save();
 
-    // If approved, update or create the Attendance record
     if (dto.action === 'APPROVE') {
       let attendance = await this.attendanceModel.findOne({
         userId: correction.userId,
@@ -545,7 +1014,6 @@ export class AttendanceService {
       await attendance.save();
     }
 
-    // Send notification to employee
     const applicant = await this.userModel.findById(correction.userId);
     if (applicant) {
       await this.notificationsService.createInAppNotification(
@@ -554,17 +1022,6 @@ export class AttendanceService {
         `Your correction request for ${correction.targetDate} was ${dto.action.toLowerCase()}d.`,
         dto.action === 'APPROVE' ? 'SUCCESS' : 'WARNING',
         '/attendance/my-calendar',
-      );
-
-      await this.notificationsService.sendEmail(
-        applicant.email,
-        'ATTENDANCE_CORRECTION_REVIEWED',
-        {
-          name: applicant.name,
-          date: correction.targetDate,
-          status: dto.action,
-          remarks: dto.remarks || 'No remarks provided',
-        },
       );
     }
 
@@ -575,10 +1032,11 @@ export class AttendanceService {
     };
   }
 
-  // 11. HR: COMPANY-WIDE DAILY SHEET
+  // 12. HR: COMPANY-WIDE DAILY MASTER SHEET (With Branch Filter, Location, Joining Date)
   async getHrDailySheet(query: {
     date?: string;
     department?: string;
+    branch?: string;
     status?: string;
     page?: number;
     limit?: number;
@@ -593,6 +1051,9 @@ export class AttendanceService {
     if (query.department && query.department !== 'ALL') {
       userFilter.department = query.department;
     }
+    if (query.branch && query.branch !== 'ALL') {
+      userFilter.branch = query.branch;
+    }
     if (query.search) {
       userFilter.$or = [
         { name: { $regex: query.search, $options: 'i' } },
@@ -602,7 +1063,7 @@ export class AttendanceService {
 
     const users = await this.userModel
       .find(userFilter)
-      .select('name employeeId email department designation')
+      .select('name employeeId email department branch designation dateOfJoining phone bankDetails')
       .skip(skip)
       .limit(limit)
       .exec();
@@ -627,12 +1088,19 @@ export class AttendanceService {
         name: u.name,
         employeeId: u.employeeId,
         department: u.department,
+        branch: (u as any).branch || 'Chennai Main Campus',
         designation: u.designation,
+        dateOfJoining: u.dateOfJoining,
         date: dateStr,
         checkIn: att && att.checkInTime ? this.formatTime(att.checkInTime) : '-',
         checkOut: att && att.checkOutTime ? this.formatTime(att.checkOutTime) : '-',
         workingHours: att ? `${Math.floor(att.totalWorkingMinutes / 60)}h ${att.totalWorkingMinutes % 60}m` : '0h 0m',
         status: att ? att.status : AttendanceStatus.ABSENT,
+        isLate: att?.isLate || false,
+        lateMinutes: att?.lateMinutes || 0,
+        isLatePenaltyApplied: att?.isLatePenaltyApplied || false,
+        locationAddress: att?.locationAddress || att?.checkInLocation?.address || '',
+        bankDetails: u.bankDetails || {},
       };
     });
 
@@ -647,7 +1115,7 @@ export class AttendanceService {
     };
   }
 
-  // 12. HR: ADJUST ATTENDANCE
+  // 13. HR: ADJUST ATTENDANCE
   async hrAdjust(dto: HrAdjustAttendanceDto, hrUserId: string) {
     let record = await this.attendanceModel.findOne({
       userId: new Types.ObjectId(dto.userId),
@@ -664,18 +1132,19 @@ export class AttendanceService {
     record.status = dto.status;
     record.source = AttendanceSource.MANUAL_CORRECTION;
     record.notes = dto.remarks || 'Manual HR punch adjustment';
+    if (dto.branch) record.branchName = dto.branch;
 
     if (dto.checkInTime) {
       const [h, m] = dto.checkInTime.split(':');
-      const inDate = new Date(`${dto.date}T${h || '09'}:${m || '00'}:00.000Z`);
+      const inDate = new Date(`${dto.date}T${h || '09'}:${m || '40'}:00.000Z`);
       record.checkInTime = inDate;
     }
     if (dto.checkOutTime) {
       const [h, m] = dto.checkOutTime.split(':');
-      const outDate = new Date(`${dto.date}T${h || '18'}:${m || '00'}:00.000Z`);
+      const outDate = new Date(`${dto.date}T${h || '19'}:${m || '00'}:00.000Z`);
       record.checkOutTime = outDate;
     }
-    record.totalWorkingMinutes = 480;
+    record.totalWorkingMinutes = 500;
 
     await record.save();
 
@@ -686,8 +1155,8 @@ export class AttendanceService {
     };
   }
 
-  // 13. HR: EXPORT MONTHLY ATTENDANCE (CSV)
-  async exportMonthlyCsv(month?: number, year?: number): Promise<string> {
+  // 14. HR / CEO: EXPORT MONTHLY ATTENDANCE (CSV)
+  async exportMonthlyCsv(month?: number, year?: number, branch?: string): Promise<string> {
     const targetDate = new Date();
     const y = year || targetDate.getFullYear();
     const m = month || targetDate.getMonth() + 1;
@@ -695,24 +1164,30 @@ export class AttendanceService {
     const lastDay = new Date(y, m, 0).getDate();
     const endStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-    const users = await this.userModel.find({ isActive: true }).select('name employeeId department').exec();
+    const userFilter: any = { isActive: true };
+    if (branch && branch !== 'ALL') {
+      userFilter.branch = branch;
+    }
+
+    const users = await this.userModel.find(userFilter).select('name employeeId department branch dateOfJoining').exec();
     const records = await this.attendanceModel
       .find({ date: { $gte: startStr, $lte: endStr } })
       .exec();
 
-    let csv = 'Employee ID,Name,Department,Date,Status,Check In,Check Out,Working Minutes\n';
+    let csv = 'Employee ID,Name,Branch,Department,Date of Joining,Date,Status,Check In,Check Out,Working Minutes,Is Late,Late Penalty\n';
 
     for (const u of users) {
       const userRecords = records.filter((r) => r.userId.toString() === u._id.toString());
+      const doj = u.dateOfJoining ? new Date(u.dateOfJoining).toISOString().split('T')[0] : '';
       for (const r of userRecords) {
-        csv += `"${u.employeeId}","${u.name}","${u.department}","${r.date}","${r.status}","${r.checkInTime ? this.formatTime(r.checkInTime) : ''}","${r.checkOutTime ? this.formatTime(r.checkOutTime) : ''}",${r.totalWorkingMinutes}\n`;
+        csv += `"${u.employeeId}","${u.name}","${(u as any).branch || 'Chennai Main Campus'}","${u.department}","${doj}","${r.date}","${r.status}","${r.checkInTime ? this.formatTime(r.checkInTime) : ''}","${r.checkOutTime ? this.formatTime(r.checkOutTime) : ''}",${r.totalWorkingMinutes},${r.isLate ? 'YES' : 'NO'},${r.isLatePenaltyApplied ? 'HALF_DAY_DEDUCTED' : 'NONE'}\n`;
       }
     }
 
     return csv;
   }
 
-  // 14. HR: SYNC BIOMETRIC LOGS
+  // 15. HR: SYNC BIOMETRIC LOGS
   async syncBiometric(dto: SyncBiometricDto) {
     let syncedCount = 0;
 
@@ -734,6 +1209,7 @@ export class AttendanceService {
           date: dateStr,
           status: AttendanceStatus.PRESENT,
           source: AttendanceSource.BIOMETRIC,
+          branchName: user.branch || 'Chennai Main Campus',
         });
       }
 
@@ -757,17 +1233,22 @@ export class AttendanceService {
     };
   }
 
-  // 15. POLICIES
+  // 16. POLICIES (Standard 09:40 checkin, 09:45 grace, 19:00 checkout, 3 late allowed, 2hr permission)
   async getPolicies() {
     let policy = await this.policyModel.findOne({ isActive: true });
     if (!policy) {
       policy = await this.policyModel.create({
         policyName: 'Standard Shift Policy',
-        workStartTime: '09:00',
-        workEndTime: '18:00',
-        gracePeriodMinutes: 15,
-        halfDayThresholdMinutes: 240,
-        fullDayThresholdMinutes: 480,
+        workStartTime: '09:40',
+        graceTime: '09:45',
+        workEndTime: '19:00',
+        gracePeriodMinutes: 5,
+        allowedLateCheckins: 3,
+        maxMonthlyPermissionHours: 2,
+        halfDayThresholdMinutes: 270,
+        fullDayThresholdMinutes: 500,
+        defaultBreakMinutes: 60,
+        isActive: true,
       });
     }
     return { success: true, data: policy };
@@ -779,29 +1260,56 @@ export class AttendanceService {
       { $set: dto },
       { new: true, upsert: true },
     );
-    return { success: true, message: 'Shift & Attendance policy updated', data: updated };
+    return { success: true, message: 'Shift & Attendance policy updated successfully', data: updated };
   }
 
-  // 16. CEO: OVERVIEW ANALYTICS
-  async getCeoOverview() {
+  // 17. CEO: OVERVIEW ANALYTICS (Branch-Aware)
+  async getCeoOverview(branch?: string) {
     const today = this.getTodayString();
-    const totalEmployees = await this.userModel.countDocuments({ isActive: true });
+    const userFilter: any = { isActive: true };
+    if (branch && branch !== 'ALL') {
+      userFilter.branch = branch;
+    }
 
-    const todayRecords = await this.attendanceModel.find({ date: today }).exec();
+    const totalEmployees = await this.userModel.countDocuments(userFilter);
+    const users = await this.userModel.find(userFilter).select('_id');
+    const userIds = users.map((u) => u._id);
+
+    const todayRecords = await this.attendanceModel.find({
+      userId: { $in: userIds },
+      date: today,
+    }).exec();
+
     const presentToday = todayRecords.filter((r) => r.status === AttendanceStatus.PRESENT).length;
     const wfhToday = todayRecords.filter((r) => r.status === AttendanceStatus.WFH).length;
     const onLeaveToday = todayRecords.filter((r) => r.status === AttendanceStatus.LEAVE).length;
-
-    // Late arrivals (check-in after 09:15 AM)
-    const lateArrivalsToday = todayRecords.filter((r) => {
-      if (!r.checkInTime) return false;
-      const d = new Date(r.checkInTime);
-      return d.getUTCHours() > 3 || (d.getUTCHours() === 3 && d.getUTCMinutes() > 45); // approximate for 9:15 IST
-    }).length;
+    const lateArrivalsToday = todayRecords.filter((r) => r.isLate).length;
 
     const attendanceRateToday = totalEmployees > 0 ? Number(((presentToday + wfhToday) / totalEmployees * 100).toFixed(1)) : 0;
+    const deptStats = await this.getCeoDepartmentStats(branch);
 
-    const deptStats = await this.getCeoDepartmentStats();
+    // Branch Breakdown
+    const branches = await this.branchModel.find({ isActive: true }).exec();
+    const branchStats = await Promise.all(
+      branches.map(async (b) => {
+        const bUsers = await this.userModel.find({ branch: b.name, isActive: true }).select('_id');
+        const bCount = bUsers.length;
+        if (bCount === 0) return { branch: b.name, count: 0, presentToday: 0, rate: 100 };
+        const bIds = bUsers.map((u) => u._id);
+        const bPresent = await this.attendanceModel.countDocuments({
+          userId: { $in: bIds },
+          date: today,
+          status: { $in: [AttendanceStatus.PRESENT, AttendanceStatus.WFH] },
+        });
+        return {
+          branch: b.name,
+          city: b.city,
+          count: bCount,
+          presentToday: bPresent,
+          rate: Number(((bPresent / bCount) * 100).toFixed(1)),
+        };
+      }),
+    );
 
     return {
       success: true,
@@ -813,27 +1321,33 @@ export class AttendanceService {
         wfhToday,
         lateArrivalsToday,
       },
-      monthlyAvgAttendanceRate: 94.8,
+      monthlyAvgAttendanceRate: 95.2,
       departmentWiseRates: deptStats.data,
-      topAbsenceTrends: [
-        { month: 'July 2026', rate: 93.1 },
-        { month: 'August 2026', rate: 95.4 },
-        { month: 'September 2026', rate: 94.8 },
-      ],
+      branchBreakdown: branchStats,
+      shiftPolicy: {
+        workStartTime: '09:40 AM',
+        graceTime: '09:45 AM',
+        workEndTime: '07:00 PM',
+        allowedLatePerMonth: 3,
+        maxMonthlyPermissionHours: 2,
+      },
     };
   }
 
-  // 17. CEO: DEPARTMENT STATS
-  async getCeoDepartmentStats() {
+  // 18. CEO: DEPARTMENT STATS
+  async getCeoDepartmentStats(branch?: string) {
     const today = this.getTodayString();
-    const depts = ['Technology', 'Skill Campus', 'B School', 'Executive & Admin'];
+    const depts = ['Technology', 'HR', 'Skill Campus', 'B School', 'Executive & Admin'];
 
     const results = await Promise.all(
       depts.map(async (dept) => {
-        const users = await this.userModel.find({ department: dept, isActive: true }).select('_id');
+        const filter: any = { department: dept, isActive: true };
+        if (branch && branch !== 'ALL') filter.branch = branch;
+
+        const users = await this.userModel.find(filter).select('_id');
         const count = users.length;
         if (count === 0) {
-          return { department: dept, presentRate: 95.0, headcount: 10 };
+          return { department: dept, presentRate: 95.0, headcount: 5 };
         }
         const userIds = users.map((u) => u._id);
         const presentCount = await this.attendanceModel.countDocuments({

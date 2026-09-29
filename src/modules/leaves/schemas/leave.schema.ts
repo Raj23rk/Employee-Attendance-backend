@@ -21,11 +21,32 @@ export class Leave {
   @Prop({ required: true, min: 0.5 })
   days: number;
 
+  @Prop({ default: 0 })
+  paidDays: number;
+
+  @Prop({ default: 0 })
+  lopDays: number; // Loss of Pay days
+
+  @Prop({ default: false })
+  isLop: boolean;
+
+  @Prop({ default: '' })
+  lopReason?: string;
+
   @Prop({ required: true })
   reason: string;
 
   @Prop({ default: '' })
-  documentUrl?: string;
+  documentUrl?: string; // Supporting document / Medical certificate
+
+  @Prop({ default: '' })
+  medicalCertificateUrl?: string; // Mandatory for Sick/Medical leave, otherwise LOP
+
+  @Prop({ default: false })
+  isMedicalCertificateVerified: boolean;
+
+  @Prop({ default: 'Chennai Main Campus' })
+  branch?: string;
 
   @Prop({
     required: true,

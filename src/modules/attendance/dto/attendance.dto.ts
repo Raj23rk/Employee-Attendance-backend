@@ -6,9 +6,11 @@ import {
   IsNotEmpty,
   IsArray,
   ValidateNested,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AttendanceStatus } from '../../../common/enums/attendance-status.enum';
+import { PermissionStatus } from '../schemas/permission.schema';
 
 export class CheckInDto {
   @IsOptional()
@@ -18,6 +20,18 @@ export class CheckInDto {
   @IsOptional()
   @IsNumber()
   longitude?: number;
+
+  @IsOptional()
+  @IsString()
+  locationAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
+  branchId?: string;
 
   @IsOptional()
   @IsString()
@@ -32,6 +46,18 @@ export class CheckOutDto {
   @IsOptional()
   @IsNumber()
   longitude?: number;
+
+  @IsOptional()
+  @IsString()
+  locationAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
+  branchId?: string;
 
   @IsOptional()
   @IsString()
@@ -92,6 +118,10 @@ export class HrAdjustAttendanceDto {
 
   @IsOptional()
   @IsString()
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
   remarks?: string;
 }
 
@@ -127,11 +157,23 @@ export class UpdatePolicyDto {
 
   @IsOptional()
   @IsString()
+  graceTime?: string;
+
+  @IsOptional()
+  @IsString()
   workEndTime?: string;
 
   @IsOptional()
   @IsNumber()
   gracePeriodMinutes?: number;
+
+  @IsOptional()
+  @IsNumber()
+  allowedLateCheckins?: number;
+
+  @IsOptional()
+  @IsNumber()
+  maxMonthlyPermissionHours?: number;
 
   @IsOptional()
   @IsNumber()
@@ -144,4 +186,38 @@ export class UpdatePolicyDto {
   @IsOptional()
   @IsNumber()
   defaultBreakMinutes?: number;
+}
+
+// Permission DTOs (2 hours monthly limit)
+export class ApplyPermissionDto {
+  @IsNotEmpty()
+  @IsString()
+  date: string; // YYYY-MM-DD
+
+  @IsNotEmpty()
+  @IsString()
+  startTime: string; // e.g. "09:40 AM" or "14:00"
+
+  @IsNotEmpty()
+  @IsString()
+  endTime: string; // e.g. "11:40 AM" or "16:00"
+
+  @IsNotEmpty()
+  @IsNumber()
+  @Min(0.25)
+  durationHours: number; // e.g. 1.0, 1.5, 2.0
+
+  @IsNotEmpty()
+  @IsString()
+  reason: string;
+}
+
+export class ReviewPermissionDto {
+  @IsNotEmpty()
+  @IsEnum(['APPROVE', 'REJECT'])
+  action: 'APPROVE' | 'REJECT';
+
+  @IsOptional()
+  @IsString()
+  remarks?: string;
 }

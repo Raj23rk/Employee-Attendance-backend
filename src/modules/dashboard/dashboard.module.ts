@@ -10,6 +10,8 @@ import {
 } from './schemas/celebration-wish.schema';
 import { Holiday, HolidaySchema } from './schemas/holiday.schema';
 import { Task, TaskSchema } from '../tasks/schemas/task.schema';
+import { Permission, PermissionSchema } from '../attendance/schemas/permission.schema';
+import { Branch, BranchSchema } from '../organization/schemas/branch.schema';
 import { DashboardService } from './dashboard.service';
 import { DashboardController } from './dashboard.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -24,6 +26,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
       { name: CelebrationWish.name, schema: CelebrationWishSchema },
       { name: Holiday.name, schema: HolidaySchema },
       { name: Task.name, schema: TaskSchema },
+      { name: Permission.name, schema: PermissionSchema },
+      { name: Branch.name, schema: BranchSchema },
     ]),
     NotificationsModule,
   ],

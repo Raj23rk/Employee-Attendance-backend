@@ -14,10 +14,10 @@ export class LeaveBalance {
   @Prop({ default: 15 })
   annual: number;
 
-  @Prop({ default: 12 })
+  @Prop({ default: 12 }) // 12 casual leaves per year (1 per month)
   casual: number;
 
-  @Prop({ default: 10 })
+  @Prop({ default: 10 }) // Sick / Medical leaves
   sick: number;
 
   // Maternity leave for female employees (e.g. 182 days / 26 weeks statutory)
@@ -29,7 +29,7 @@ export class LeaveBalance {
   paternity: number;
 
   @Prop({ default: 0 })
-  lossOfPay: number;
+  lossOfPay: number; // Total accumulated Loss of Pay days
 }
 
 export const LeaveBalanceSchema = SchemaFactory.createForClass(LeaveBalance);

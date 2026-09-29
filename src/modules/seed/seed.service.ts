@@ -9,6 +9,7 @@ import {
   NotificationTemplateDocument,
 } from '../notifications/schemas/notification-template.schema';
 import { Department, DepartmentDocument } from '../organization/schemas/department.schema';
+import { Branch, BranchDocument } from '../organization/schemas/branch.schema';
 import { Holiday, HolidayDocument } from '../dashboard/schemas/holiday.schema';
 import {
   AttendancePolicy,
@@ -29,6 +30,7 @@ export class SeedService implements OnApplicationBootstrap {
     @InjectModel(NotificationTemplate.name)
     private templateModel: Model<NotificationTemplateDocument>,
     @InjectModel(Department.name) private deptModel: Model<DepartmentDocument>,
+    @InjectModel(Branch.name) private branchModel: Model<BranchDocument>,
     @InjectModel(Holiday.name) private holidayModel: Model<HolidayDocument>,
     @InjectModel(AttendancePolicy.name) private policyModel: Model<AttendancePolicyDocument>,
     @InjectModel(Attendance.name) private attendanceModel: Model<AttendanceDocument>,
@@ -40,12 +42,62 @@ export class SeedService implements OnApplicationBootstrap {
 
   async seedAll() {
     this.logger.log('Checking database seed state...');
+    await this.seedBranches();
     await this.seedDepartments();
     await this.seedPolicies();
     await this.seedNotificationTemplates();
     await this.seedHolidays();
     await this.seedUsers();
     this.logger.log('Database seeding process completed.');
+  }
+
+  async seedBranches() {
+    const branches = [
+      {
+        name: 'Chennai Main Campus',
+        code: 'CHN-01',
+        address: 'Block A, Wegrow Knowledge Park, OMR',
+        city: 'Chennai',
+        state: 'Tamil Nadu',
+        latitude: 12.9716,
+        longitude: 80.2436,
+        radiusMeters: 500,
+        contactEmail: 'chennai.office@wegrow.edu.in',
+        contactPhone: '+91 44 2847 1100',
+        isActive: true,
+      },
+      {
+        name: 'Bangalore Tech Hub',
+        code: 'BLR-02',
+        address: '4th Floor, Tech Innovation Center, Whitefield',
+        city: 'Bangalore',
+        state: 'Karnataka',
+        latitude: 12.9698,
+        longitude: 77.7499,
+        radiusMeters: 500,
+        contactEmail: 'bangalore.hub@wegrow.edu.in',
+        contactPhone: '+91 80 4123 9900',
+        isActive: true,
+      },
+      {
+        name: 'Hyderabad Branch',
+        code: 'HYD-03',
+        address: 'Survey No. 64, HITEC City, Madhapur',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        latitude: 17.4483,
+        longitude: 78.3915,
+        radiusMeters: 500,
+        contactEmail: 'hyderabad.branch@wegrow.edu.in',
+        contactPhone: '+91 40 6789 2200',
+        isActive: true,
+      },
+    ];
+
+    for (const b of branches) {
+      await this.branchModel.updateOne({ code: b.code }, { $set: b }, { upsert: true });
+    }
+    this.logger.log('Seeded initial 3 company branches');
   }
 
   async seedDepartments() {
@@ -64,20 +116,26 @@ export class SeedService implements OnApplicationBootstrap {
   }
 
   async seedPolicies() {
-    const policy = await this.policyModel.findOne({ isActive: true });
-    if (!policy) {
-      await this.policyModel.create({
-        policyName: 'Standard Campus Shift Policy',
-        workStartTime: '09:00',
-        workEndTime: '18:00',
-        gracePeriodMinutes: 15,
-        halfDayThresholdMinutes: 240,
-        fullDayThresholdMinutes: 480,
-        defaultBreakMinutes: 60,
-        isActive: true,
-      });
-      this.logger.log('Seeded standard attendance policy');
-    }
+    await this.policyModel.updateOne(
+      { isActive: true },
+      {
+        $set: {
+          policyName: 'Standard Campus Shift Policy',
+          workStartTime: '09:40', // 9:40 AM Check-in
+          graceTime: '09:45', // 9:45 AM Grace time
+          workEndTime: '19:00', // 7:00 PM Check-out
+          gracePeriodMinutes: 5,
+          allowedLateCheckins: 3, // 3 grace check-ins allowed per month
+          maxMonthlyPermissionHours: 2, // 2 hours permission allowed per month
+          halfDayThresholdMinutes: 270,
+          fullDayThresholdMinutes: 500,
+          defaultBreakMinutes: 60,
+          isActive: true,
+        },
+      },
+      { upsert: true },
+    );
+    this.logger.log('Seeded standard shift policy: 09:40 Check-in, 09:45 Grace, 19:00 Check-out');
   }
 
   async seedNotificationTemplates() {
@@ -144,42 +202,9 @@ export class SeedService implements OnApplicationBootstrap {
   }
 
   async seedUsers() {
-    const ceoEmail = 'ceo@wegrow.edu.in';
-    let ceo = await this.userModel.findOne({ email: ceoEmail });
-
     const defaultPasswordHash = await bcrypt.hash('Password@123', 10);
 
-    if (!ceo) {
-      ceo = await this.userModel.create({
-        employeeId: 'WG-CEO-001',
-        name: 'Raj CEO',
-        email: ceoEmail,
-        password: defaultPasswordHash,
-        role: Role.CEO,
-        gender: Gender.MALE,
-        department: 'Executive & Admin',
-        designation: 'Chief Executive Officer',
-        phone: '+91 9876543210',
-        dateOfJoining: new Date('2022-01-01'),
-        dateOfBirth: new Date('1985-09-15'),
-        isActive: true,
-      });
-      await this.balanceModel.create({
-        userId: ceo._id,
-        year: 2026,
-        annual: 20,
-        casual: 12,
-        sick: 10,
-        maternity: 0,
-        paternity: 3,
-      });
-      this.logger.log(`Created CEO user: ${ceoEmail} (Password@123)`);
-    }
-
-    // Clean up any non-@wegrow.edu.in accounts
-    await this.userModel.deleteMany({ email: { $not: /@wegrow\.edu\.in$/i } });
-
-    // Rajkumar CEO: rajkumar@wegrow.edu.in
+    // Rajkumar CEO
     const myEmail = 'rajkumar@wegrow.edu.in';
     let myUser = await this.userModel.findOne({ email: myEmail });
     if (!myUser) {
@@ -191,9 +216,17 @@ export class SeedService implements OnApplicationBootstrap {
         role: Role.CEO,
         gender: Gender.MALE,
         department: 'Executive & Admin',
+        branch: 'Chennai Main Campus',
         designation: 'Managing Director & CEO',
         phone: '+91 9876543210',
         dateOfJoining: new Date('2022-01-01'),
+        dateOfBirth: new Date('1985-09-15'),
+        bankDetails: {
+          accountName: 'Rajkumar',
+          accountNumber: '918273645012',
+          bankName: 'HDFC Bank',
+          ifscCode: 'HDFC0001234',
+        },
         isActive: true,
       });
       await this.balanceModel.create({
@@ -205,7 +238,42 @@ export class SeedService implements OnApplicationBootstrap {
         maternity: 0,
         paternity: 3,
       });
-      this.logger.log(`Created User account: ${myEmail} (Password@123)`);
+    }
+
+    // CEO account
+    const ceoEmail = 'ceo@wegrow.edu.in';
+    let ceo = await this.userModel.findOne({ email: ceoEmail });
+    if (!ceo) {
+      ceo = await this.userModel.create({
+        employeeId: 'WG-CEO-001',
+        name: 'Raj CEO',
+        email: ceoEmail,
+        password: defaultPasswordHash,
+        role: Role.CEO,
+        gender: Gender.MALE,
+        department: 'Executive & Admin',
+        branch: 'Chennai Main Campus',
+        designation: 'Chief Executive Officer',
+        phone: '+91 9876543210',
+        dateOfJoining: new Date('2022-01-01'),
+        dateOfBirth: new Date('1985-09-15'),
+        bankDetails: {
+          accountName: 'Raj CEO',
+          accountNumber: '918273645013',
+          bankName: 'ICICI Bank',
+          ifscCode: 'ICIC0005678',
+        },
+        isActive: true,
+      });
+      await this.balanceModel.create({
+        userId: ceo._id,
+        year: 2026,
+        annual: 20,
+        casual: 12,
+        sick: 10,
+        maternity: 0,
+        paternity: 3,
+      });
     }
 
     // HR User
@@ -220,11 +288,18 @@ export class SeedService implements OnApplicationBootstrap {
         role: Role.HR,
         gender: Gender.FEMALE,
         department: 'HR',
+        branch: 'Chennai Main Campus',
         designation: 'Head of Human Resources',
-        managerId: ceo._id,
+        managerId: myUser?._id || ceo._id,
         phone: '+91 9876543211',
         dateOfJoining: new Date('2023-03-01'),
         dateOfBirth: new Date('1990-09-28'),
+        bankDetails: {
+          accountName: 'Ananya HR',
+          accountNumber: '445566778899',
+          bankName: 'State Bank of India',
+          ifscCode: 'SBIN0004321',
+        },
         isActive: true,
       });
       await this.balanceModel.create({
@@ -236,41 +311,9 @@ export class SeedService implements OnApplicationBootstrap {
         maternity: 182,
         paternity: 0,
       });
-      this.logger.log(`Created HR user: ${hrEmail} (Password@123)`);
     }
 
-    // Admin User
-    const adminEmail = 'admin@wegrow.edu.in';
-    let admin = await this.userModel.findOne({ email: adminEmail });
-    if (!admin) {
-      admin = await this.userModel.create({
-        employeeId: 'WG-ADM-001',
-        name: 'System Admin',
-        email: adminEmail,
-        password: defaultPasswordHash,
-        role: Role.ADMIN,
-        gender: Gender.MALE,
-        department: 'Executive & Admin',
-        designation: 'System Administrator',
-        managerId: ceo._id,
-        phone: '+91 9876543200',
-        dateOfJoining: new Date('2023-01-01'),
-        dateOfBirth: new Date('1991-05-12'),
-        isActive: true,
-      });
-      await this.balanceModel.create({
-        userId: admin._id,
-        year: 2026,
-        annual: 15,
-        casual: 12,
-        sick: 10,
-        maternity: 0,
-        paternity: 3,
-      });
-      this.logger.log(`Created Admin user: ${adminEmail} (Password@123)`);
-    }
-
-    // Manager User
+    // Manager User (Bangalore Tech Hub)
     const mgrEmail = 'manager@wegrow.edu.in';
     let manager = await this.userModel.findOne({ email: mgrEmail });
     if (!manager) {
@@ -282,11 +325,18 @@ export class SeedService implements OnApplicationBootstrap {
         role: Role.MANAGER,
         gender: Gender.MALE,
         department: 'Technology',
+        branch: 'Bangalore Tech Hub',
         designation: 'Engineering Manager',
-        managerId: ceo._id,
+        managerId: myUser?._id || ceo._id,
         phone: '+91 9876543212',
         dateOfJoining: new Date('2023-06-01'),
         dateOfBirth: new Date('1988-10-10'),
+        bankDetails: {
+          accountName: 'Vikram Lead',
+          accountNumber: '556677889900',
+          bankName: 'Axis Bank',
+          ifscCode: 'UTIB0001122',
+        },
         isActive: true,
       });
       await this.balanceModel.create({
@@ -298,10 +348,9 @@ export class SeedService implements OnApplicationBootstrap {
         maternity: 0,
         paternity: 3,
       });
-      this.logger.log(`Created Manager user: ${mgrEmail} (Password@123)`);
     }
 
-    // Female Employee: Priya Sharma (Eligible for Maternity leave)
+    // Female Employee: Priya Sharma (Hyderabad Branch, Maternity eligible)
     const priyaEmail = 'priya.sharma@wegrow.edu.in';
     let priya = await this.userModel.findOne({ email: priyaEmail });
     if (!priya) {
@@ -313,11 +362,18 @@ export class SeedService implements OnApplicationBootstrap {
         role: Role.EMPLOYEE,
         gender: Gender.FEMALE,
         department: 'Technology',
+        branch: 'Hyderabad Branch',
         designation: 'Frontend Engineer',
         managerId: manager._id,
         phone: '+91 9876543214',
         dateOfJoining: new Date('2024-02-15'),
         dateOfBirth: new Date('1996-09-14'),
+        bankDetails: {
+          accountName: 'Priya Sharma',
+          accountNumber: '112233445566',
+          bankName: 'Kotak Mahindra Bank',
+          ifscCode: 'KKBK0009988',
+        },
         isActive: true,
       });
       await this.balanceModel.create({
@@ -326,14 +382,13 @@ export class SeedService implements OnApplicationBootstrap {
         annual: 15,
         casual: 12,
         sick: 10,
-        maternity: 182, // 26 weeks statutory maternity leave for women
+        maternity: 182,
         paternity: 0,
       });
-      await this.seedDemoAttendance(priya._id);
-      this.logger.log(`Created Female Employee: ${priyaEmail} (Password@123, Maternity Eligible)`);
+      await this.seedDemoAttendance(priya._id, 'Hyderabad Branch');
     }
 
-    // Male Employee: Vijay Kumaran (Eligible for 3-Day Paid Paternity leave)
+    // Male Employee: Vijay Kumaran (Chennai Main Campus, 3-Day Paid Paternity)
     const vijayEmail = 'vijay.kumaran@wegrow.edu.in';
     let vijay = await this.userModel.findOne({ email: vijayEmail });
     if (!vijay) {
@@ -345,11 +400,18 @@ export class SeedService implements OnApplicationBootstrap {
         role: Role.EMPLOYEE,
         gender: Gender.MALE,
         department: 'Technology',
+        branch: 'Chennai Main Campus',
         designation: 'Software Engineer',
         managerId: manager._id,
         phone: '+91 9876543215',
         dateOfJoining: new Date('2024-03-01'),
         dateOfBirth: new Date('1997-09-08'),
+        bankDetails: {
+          accountName: 'Vijay Kumaran',
+          accountNumber: '998877665544',
+          bankName: 'Canara Bank',
+          ifscCode: 'CNRB0002233',
+        },
         isActive: true,
       });
       await this.balanceModel.create({
@@ -359,27 +421,26 @@ export class SeedService implements OnApplicationBootstrap {
         casual: 12,
         sick: 10,
         maternity: 0,
-        paternity: 3, // 3-day paid paternity leave for men
+        paternity: 3,
       });
-      await this.seedDemoAttendance(vijay._id);
-      this.logger.log(`Created Male Employee: ${vijayEmail} (Password@123, 3-Day Paid Paternity Eligible)`);
+      await this.seedDemoAttendance(vijay._id, 'Chennai Main Campus');
     }
   }
 
-  async seedDemoAttendance(userId: any) {
-    const targetMonth = 9; // September
+  async seedDemoAttendance(userId: any, branchName: string = 'Chennai Main Campus') {
+    const targetMonth = 9;
     const targetYear = 2026;
 
     const sampleDays = [
-      { day: 1, status: AttendanceStatus.PRESENT, in: '09:05:00', out: '18:15:00', min: 490 },
-      { day: 2, status: AttendanceStatus.PRESENT, in: '09:00:00', out: '18:00:00', min: 480 },
-      { day: 3, status: AttendanceStatus.PRESENT, in: '08:55:00', out: '18:10:00', min: 495 },
-      { day: 4, status: AttendanceStatus.LEAVE, in: null, out: null, min: 0 },
-      { day: 7, status: AttendanceStatus.PRESENT, in: '09:12:00', out: '18:30:00', min: 498 },
-      { day: 8, status: AttendanceStatus.PRESENT, in: '09:15:00', out: '18:15:00', min: 480 },
-      { day: 9, status: AttendanceStatus.PRESENT, in: '09:00:00', out: '18:00:00', min: 480 },
-      { day: 10, status: AttendanceStatus.WFH, in: '09:30:00', out: '18:30:00', min: 480 },
-      { day: 11, status: AttendanceStatus.PRESENT, in: '09:05:00', out: '18:05:00', min: 480 },
+      { day: 1, status: AttendanceStatus.PRESENT, in: '09:35:00', out: '19:05:00', min: 510, isLate: false },
+      { day: 2, status: AttendanceStatus.PRESENT, in: '09:42:00', out: '19:10:00', min: 508, isLate: true }, // Late 1 (Grace)
+      { day: 3, status: AttendanceStatus.PRESENT, in: '09:44:00', out: '19:00:00', min: 500, isLate: true }, // Late 2 (Grace)
+      { day: 4, status: AttendanceStatus.LEAVE, in: null, out: null, min: 0, isLate: false },
+      { day: 7, status: AttendanceStatus.PRESENT, in: '09:43:00', out: '19:15:00', min: 512, isLate: true }, // Late 3 (Grace)
+      { day: 8, status: AttendanceStatus.HALF_DAY, in: '09:50:00', out: '19:00:00', min: 490, isLate: true, isLatePenalty: true }, // Late 4 (Half-day penalty)
+      { day: 9, status: AttendanceStatus.PRESENT, in: '09:38:00', out: '19:00:00', min: 502, isLate: false },
+      { day: 10, status: AttendanceStatus.WFH, in: '09:35:00', out: '19:00:00', min: 505, isLate: false },
+      { day: 11, status: AttendanceStatus.PRESENT, in: '09:30:00', out: '19:00:00', min: 510, isLate: false },
     ];
 
     for (const s of sampleDays) {
@@ -391,10 +452,16 @@ export class SeedService implements OnApplicationBootstrap {
           date: dateStr,
           status: s.status,
           source: AttendanceSource.WEB,
+          branchName,
           checkInTime: s.in ? new Date(`${dateStr}T${s.in}.000Z`) : null,
           checkOutTime: s.out ? new Date(`${dateStr}T${s.out}.000Z`) : null,
           totalWorkingMinutes: s.min,
           breakMinutes: 60,
+          isLate: s.isLate,
+          lateMinutes: s.isLate ? 5 : 0,
+          isLatePenaltyApplied: s.isLatePenalty || false,
+          latePenaltyType: s.isLatePenalty ? 'HALF_DAY_DEDUCTION' : 'NONE',
+          notes: s.isLatePenalty ? '4th Late arrival: Half-day salary deduction' : s.isLate ? 'Late arrival in grace' : 'On-time',
         });
       }
     }

@@ -44,7 +44,16 @@ export class CreateUserDto {
 
   @IsOptional()
   @IsString()
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
+  branchId?: string;
+
+  @IsOptional()
+  @IsString()
   designation?: string;
+
 
   @IsOptional()
   @IsString()
@@ -124,7 +133,16 @@ export class UpdateProfileDto {
 
   @IsOptional()
   @IsString()
+  branch?: string;
+
+  @IsOptional()
+  @IsString()
+  branchId?: string;
+
+  @IsOptional()
+  @IsString()
   avatarUrl?: string;
+
 }
 
 export class ChangePasswordDto {

@@ -27,6 +27,8 @@ import {
   HrAdjustAttendanceDto,
   SyncBiometricDto,
   UpdatePolicyDto,
+  ApplyPermissionDto,
+  ReviewPermissionDto,
 } from './dto/attendance.dto';
 
 @ApiTags('Attendance')
@@ -38,7 +40,7 @@ export class AttendanceController {
 
   // 1. Check In
   @Post('check-in')
-  @ApiOperation({ summary: 'Punch In (Web/Mobile)' })
+  @ApiOperation({ summary: 'Punch In with GPS Location & 9:40 AM Shift / 9:45 Grace Detection' })
   async checkIn(
     @CurrentUser('id') userId: string,
     @Body() dto: CheckInDto,
@@ -50,7 +52,7 @@ export class AttendanceController {
 
   // 2. Check Out
   @Post('check-out')
-  @ApiOperation({ summary: 'Punch Out' })
+  @ApiOperation({ summary: 'Punch Out with GPS Location & 7:00 PM Target Calculation' })
   async checkOut(
     @CurrentUser('id') userId: string,
     @Body() dto: CheckOutDto,
@@ -62,14 +64,14 @@ export class AttendanceController {
 
   // 3. Today's Status
   @Get('today')
-  @ApiOperation({ summary: "Get current user's today check-in status and live timer" })
+  @ApiOperation({ summary: "Get current user's today check-in status, late arrivals, branch, and live timer" })
   async getToday(@CurrentUser('id') userId: string) {
     return this.attendanceService.getTodayStatus(userId);
   }
 
   // 4. Monthly Calendar Grid
   @Get('my-calendar')
-  @ApiOperation({ summary: 'Get monthly attendance calendar grid' })
+  @ApiOperation({ summary: 'Get monthly attendance calendar grid with late arrival & deduction flags' })
   async getMyCalendar(
     @CurrentUser('id') userId: string,
     @Query('month') month?: number,
@@ -78,7 +80,53 @@ export class AttendanceController {
     return this.attendanceService.getMyCalendar(userId, month, year);
   }
 
-  // 5. Submit Attendance Correction
+  // 5. Apply Monthly Permission (Max 2 hours/month allowed)
+  @Post('permissions/apply')
+  @ApiOperation({ summary: 'Apply for monthly permission (Max 2 hours per month; excess triggers half-day deduction)' })
+  async applyPermission(
+    @CurrentUser('id') userId: string,
+    @Body() dto: ApplyPermissionDto,
+  ) {
+    return this.attendanceService.applyPermission(userId, dto);
+  }
+
+  // 6. My Permissions & Quota
+  @Get('permissions/my')
+  @ApiOperation({ summary: 'Get my monthly permission applications and remaining hours out of 2 hrs limit' })
+  async getMyPermissions(
+    @CurrentUser('id') userId: string,
+    @Query('month') month?: number,
+    @Query('year') year?: number,
+  ) {
+    return this.attendanceService.getMyPermissions(userId, month, year);
+  }
+
+  // 7. Manager / HR: View Team Permission Requests
+  @Get('permissions/team')
+  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @ApiOperation({ summary: 'List team permission requests for review (with branch filter)' })
+  async getTeamPermissions(
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: Role,
+    @Query('branch') branch?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.attendanceService.getTeamPermissions(userId, role, branch, status);
+  }
+
+  // 8. Manager / HR: Review Permission Request
+  @Patch('permissions/:id/review')
+  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @ApiOperation({ summary: 'Approve or Reject permission request (Applies half-day deduction if over 2 hours limit)' })
+  async reviewPermission(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() dto: ReviewPermissionDto,
+  ) {
+    return this.attendanceService.reviewPermission(id, userId, dto);
+  }
+
+  // 9. Submit Attendance Correction
   @Post('corrections')
   @ApiOperation({ summary: 'Submit attendance correction request' })
   async submitCorrection(
@@ -88,25 +136,26 @@ export class AttendanceController {
     return this.attendanceService.submitCorrection(userId, dto);
   }
 
-  // 6. My Corrections
+  // 10. My Corrections
   @Get('corrections/my')
   @ApiOperation({ summary: 'List my submitted attendance corrections' })
   async getMyCorrections(@CurrentUser('id') userId: string) {
     return this.attendanceService.getMyCorrections(userId);
   }
 
-  // 7. Manager: Team Attendance Today
+  // 11. Manager: Team Attendance Today
   @Get('manager/team-today')
   @Roles(Role.MANAGER, Role.HR, Role.CEO)
-  @ApiOperation({ summary: 'Get manager team attendance today (or company-wide for HR/CEO)' })
+  @ApiOperation({ summary: 'Get manager team attendance today (with optional branch filter)' })
   async getTeamToday(
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: Role,
+    @Query('branch') branch?: string,
   ) {
-    return this.attendanceService.getTeamToday(userId, role);
+    return this.attendanceService.getTeamToday(userId, role, branch);
   }
 
-  // 8. Manager: Team Monthly Report
+  // 12. Manager: Team Monthly Report
   @Get('manager/team-monthly')
   @Roles(Role.MANAGER, Role.HR, Role.CEO)
   @ApiOperation({ summary: 'Get monthly attendance report for manager team' })
@@ -118,7 +167,7 @@ export class AttendanceController {
     return this.attendanceService.getTeamMonthly(userId, month, year);
   }
 
-  // 9. Manager / HR: Pending Corrections
+  // 13. Manager / HR: Pending Corrections
   @Get('manager/corrections')
   @Roles(Role.MANAGER, Role.HR)
   @ApiOperation({ summary: 'List pending attendance corrections for review' })
@@ -130,7 +179,7 @@ export class AttendanceController {
     return this.attendanceService.getPendingCorrections(userId, role, status);
   }
 
-  // 10. Manager / HR: Approve or Reject Correction
+  // 14. Manager / HR: Approve or Reject Correction
   @Patch('manager/corrections/:id')
   @Roles(Role.MANAGER, Role.HR)
   @ApiOperation({ summary: 'Approve or Reject attendance correction' })
@@ -142,13 +191,14 @@ export class AttendanceController {
     return this.attendanceService.reviewCorrection(id, userId, dto);
   }
 
-  // 11. HR: Daily Master Sheet
+  // 15. HR: Daily Master Sheet with Branch Filter
   @Get('hr/daily-sheet')
-  @Roles(Role.HR, Role.CEO)
-  @ApiOperation({ summary: 'Company-wide daily attendance master sheet' })
+  @Roles(Role.HR, Role.CEO, Role.ADMIN)
+  @ApiOperation({ summary: 'Company-wide daily attendance master sheet with branch filter' })
   async getHrDailySheet(
     @Query('date') date?: string,
     @Query('dept') dept?: string,
+    @Query('branch') branch?: string,
     @Query('status') status?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
@@ -157,6 +207,7 @@ export class AttendanceController {
     return this.attendanceService.getHrDailySheet({
       date,
       department: dept,
+      branch,
       status,
       page,
       limit,
@@ -164,7 +215,7 @@ export class AttendanceController {
     });
   }
 
-  // 12. HR: Adjust Attendance
+  // 16. HR: Adjust Attendance
   @Put('hr/adjust')
   @Roles(Role.HR)
   @ApiOperation({ summary: 'HR manual adjustment/override of employee attendance' })
@@ -175,22 +226,23 @@ export class AttendanceController {
     return this.attendanceService.hrAdjust(dto, hrUserId);
   }
 
-  // 13. HR / CEO: Export Monthly Attendance
+  // 17. HR / CEO: Export Monthly Attendance with Branch Filter
   @Get('hr/export')
-  @Roles(Role.HR, Role.CEO)
-  @ApiOperation({ summary: 'Export monthly attendance to CSV for payroll' })
+  @Roles(Role.HR, Role.CEO, Role.ADMIN)
+  @ApiOperation({ summary: 'Export monthly attendance to CSV for payroll with branch filter' })
   async exportAttendance(
     @Query('month') month: number,
     @Query('year') year: number,
+    @Query('branch') branch: string,
     @Res() res: Response,
   ) {
-    const csv = await this.attendanceService.exportMonthlyCsv(month, year);
+    const csv = await this.attendanceService.exportMonthlyCsv(month, year, branch);
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=attendance-${month || 'cur'}-${year || 'cur'}.csv`);
+    res.setHeader('Content-Disposition', `attachment; filename=attendance-${branch || 'all'}-${month || 'cur'}-${year || 'cur'}.csv`);
     return res.send(csv);
   }
 
-  // 14. HR: Sync Biometric Punch Logs
+  // 18. HR: Sync Biometric Punch Logs
   @Post('hr/sync-biometric')
   @Roles(Role.HR)
   @ApiOperation({ summary: 'Ingest biometric machine punch logs webhook' })
@@ -198,33 +250,33 @@ export class AttendanceController {
     return this.attendanceService.syncBiometric(dto);
   }
 
-  // 15. Policies
+  // 19. Policies
   @Get('hr/policies')
-  @ApiOperation({ summary: 'Get current office shift timings and grace period policies' })
+  @ApiOperation({ summary: 'Get current office shift timings (9:40 AM check-in, 9:45 grace, 7:00 PM checkout, 2hr permission)' })
   async getPolicies() {
     return this.attendanceService.getPolicies();
   }
 
   @Put('hr/policies')
-  @Roles(Role.HR)
+  @Roles(Role.HR, Role.CEO, Role.ADMIN)
   @ApiOperation({ summary: 'Update office shift timings and grace period policies' })
   async updatePolicy(@Body() dto: UpdatePolicyDto) {
     return this.attendanceService.updatePolicy(dto);
   }
 
-  // 16. CEO: Executive Overview
+  // 20. CEO: Executive Overview with Branch Breakdown
   @Get('ceo/overview')
-  @Roles(Role.CEO)
-  @ApiOperation({ summary: 'Company-wide attendance KPI rate and executive analytics' })
-  async getCeoOverview() {
-    return this.attendanceService.getCeoOverview();
+  @Roles(Role.CEO, Role.HR, Role.ADMIN)
+  @ApiOperation({ summary: 'Company-wide attendance KPI rate and multi-branch analytics' })
+  async getCeoOverview(@Query('branch') branch?: string) {
+    return this.attendanceService.getCeoOverview(branch);
   }
 
-  // 17. CEO: Department Breakdown
+  // 21. CEO: Department Breakdown
   @Get('ceo/department-stats')
-  @Roles(Role.CEO)
+  @Roles(Role.CEO, Role.HR, Role.ADMIN)
   @ApiOperation({ summary: 'Department-wise attendance comparison rates' })
-  async getCeoDepartmentStats() {
-    return this.attendanceService.getCeoDepartmentStats();
+  async getCeoDepartmentStats(@Query('branch') branch?: string) {
+    return this.attendanceService.getCeoDepartmentStats(branch);
   }
 }

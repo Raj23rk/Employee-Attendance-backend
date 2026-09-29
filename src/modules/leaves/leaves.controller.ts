@@ -26,14 +26,14 @@ export class LeavesController {
 
   // 1. Get Balances
   @Get('balances')
-  @ApiOperation({ summary: 'Get current user leave balances (Maternity for females, 3-day Paternity for males)' })
+  @ApiOperation({ summary: 'Get current user leave balances (1 CL/month quota, Medical cert requirements)' })
   async getBalances(@CurrentUser('id') userId: string) {
     return this.leavesService.getBalances(userId);
   }
 
   // 2. Apply for Leave
   @Post('apply')
-  @ApiOperation({ summary: 'Apply for leave (enforces Maternity & 3-day Paternity policy)' })
+  @ApiOperation({ summary: 'Apply for leave (Enforces 1 CL per month, Medical certificate for sick leave otherwise LOP)' })
   async applyLeave(
     @CurrentUser('id') userId: string,
     @Body() dto: ApplyLeaveDto,
@@ -61,18 +61,19 @@ export class LeavesController {
   // 5. Manager: Team Leave Requests
   @Get('manager/team-requests')
   @Roles(Role.MANAGER, Role.HR, Role.CEO)
-  @ApiOperation({ summary: 'List pending leave applications from reportees' })
+  @ApiOperation({ summary: 'List pending leave applications from reportees (with branch filter)' })
   async getTeamRequests(
     @CurrentUser('id') userId: string,
     @CurrentUser('role') role: Role,
+    @Query('branch') branch?: string,
   ) {
-    return this.leavesService.getTeamRequests(userId, role);
+    return this.leavesService.getTeamRequests(userId, role, branch);
   }
 
   // 6. Manager / HR: Review Leave
   @Patch('manager/:id/review')
-  @Roles(Role.MANAGER, Role.HR)
-  @ApiOperation({ summary: 'Approve or Reject leave application' })
+  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @ApiOperation({ summary: 'Approve or Reject leave application (with Medical Certificate validation)' })
   async reviewLeave(
     @Param('id') id: string,
     @CurrentUser('id') userId: string,
@@ -81,13 +82,40 @@ export class LeavesController {
     return this.leavesService.reviewLeave(id, userId, dto);
   }
 
-  // 7. Team / Org Public Leave Calendar
+  // 7. HR / CEO: Employee Leave List API
+  @Get('hr/list')
+  @Roles(Role.HR, Role.CEO, Role.ADMIN)
+  @ApiOperation({ summary: 'Company-wide employee leave list with branch, status, LOP filters, and medical cert URLs' })
+  async getHrLeaveList(
+    @Query('branch') branch?: string,
+    @Query('dept') dept?: string,
+    @Query('status') status?: string,
+    @Query('leaveType') leaveType?: string,
+    @Query('isLop') isLop?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.leavesService.getHrLeaveList({
+      branch,
+      department: dept,
+      status,
+      leaveType,
+      isLop,
+      search,
+      page,
+      limit,
+    });
+  }
+
+  // 8. Team / Org Public Leave Calendar
   @Get('calendar')
-  @ApiOperation({ summary: 'Team/Company public leave calendar' })
+  @ApiOperation({ summary: 'Team/Company public leave calendar (with optional branch filter)' })
   async getLeaveCalendar(
     @Query('month') month?: number,
     @Query('year') year?: number,
+    @Query('branch') branch?: string,
   ) {
-    return this.leavesService.getLeaveCalendar(month, year);
+    return this.leavesService.getLeaveCalendar(month, year, branch);
   }
 }

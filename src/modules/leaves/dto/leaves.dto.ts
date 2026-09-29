@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   Min,
+  IsBoolean,
 } from 'class-validator';
 import { LeaveType } from '../../../common/enums/leave-type.enum';
 
@@ -32,7 +33,11 @@ export class ApplyLeaveDto {
 
   @IsOptional()
   @IsString()
-  documentUrl?: string; // E.g. Doctor's certificate or maternity proof
+  documentUrl?: string; // Supporting document / Medical certificate
+
+  @IsOptional()
+  @IsString()
+  medicalCertificateUrl?: string; // Mandatory for SICK leave, otherwise converted to LOP
 }
 
 export class ReviewLeaveDto {
@@ -43,4 +48,12 @@ export class ReviewLeaveDto {
   @IsOptional()
   @IsString()
   comments?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  verifyMedicalCertificate?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  markAsLop?: boolean; // HR can force mark as LOP if invalid proof
 }

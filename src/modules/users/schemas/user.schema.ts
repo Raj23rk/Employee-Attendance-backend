@@ -55,11 +55,18 @@ export class User {
   @Prop({ required: true, default: 'General' })
   department: string;
 
+  @Prop({ default: 'Chennai Main Campus' })
+  branch: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Branch', default: null })
+  branchId?: MongooseSchema.Types.ObjectId | null;
+
   @Prop({ default: 'Staff' })
   designation: string;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   managerId?: MongooseSchema.Types.ObjectId | null;
+
 
   @Prop({ default: '' })
   phone?: string;

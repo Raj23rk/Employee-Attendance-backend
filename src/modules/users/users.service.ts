@@ -20,10 +20,6 @@ export class UsersService {
   ) {}
 
   async create(dto: CreateUserDto) {
-    if (!dto.email.toLowerCase().endsWith('@wegrow.edu.in')) {
-      throw new BadRequestException('Only official @wegrow.edu.in email addresses are allowed');
-    }
-
     const existing = await this.userModel.findOne({
       $or: [{ email: dto.email.toLowerCase() }, { employeeId: dto.employeeId }],
     });

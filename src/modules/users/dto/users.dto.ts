@@ -22,9 +22,6 @@ export class CreateUserDto {
 
   @IsNotEmpty()
   @IsEmail()
-  @Matches(/^[a-zA-Z0-9._%+-]+@wegrow\.edu\.in$/i, {
-    message: 'Only official @wegrow.edu.in email addresses are allowed',
-  })
   email: string;
 
   @IsNotEmpty()

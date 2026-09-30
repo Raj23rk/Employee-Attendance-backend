@@ -94,61 +94,15 @@ export class OrganizationService {
     return { success: true, count: depts.length, data: depts };
   }
 
-  // 4. Multi-Branch Management (Initial 3 Branches + Dynamic Additions) - Optimized with single aggregation
+  // 4. Multi-Branch Management - Dynamic only
   async getBranches() {
-    let [branches, userCounts] = await Promise.all([
+    const [branches, userCounts] = await Promise.all([
       this.branchModel.find().populate('branchHeadId', 'name email').sort({ name: 1 }).lean(),
       this.userModel.aggregate([
         { $match: { isActive: true } },
         { $group: { _id: '$branch', count: { $sum: 1 } } },
       ]),
     ]);
-
-    if (branches.length === 0) {
-      // Seed default 3 company branches
-      await this.branchModel.insertMany([
-        {
-          name: 'Chennai Main Campus',
-          code: 'CHN-01',
-          address: 'Block A, Wegrow Knowledge Park, OMR',
-          city: 'Chennai',
-          state: 'Tamil Nadu',
-          latitude: 12.9716,
-          longitude: 80.2436,
-          radiusMeters: 500,
-          contactEmail: 'chennai.office@wegrow.edu.in',
-          contactPhone: '+91 44 2847 1100',
-          isActive: true,
-        },
-        {
-          name: 'Bangalore Tech Hub',
-          code: 'BLR-02',
-          address: '4th Floor, Tech Innovation Center, Whitefield',
-          city: 'Bangalore',
-          state: 'Karnataka',
-          latitude: 12.9698,
-          longitude: 77.7499,
-          radiusMeters: 500,
-          contactEmail: 'bangalore.hub@wegrow.edu.in',
-          contactPhone: '+91 80 4123 9900',
-          isActive: true,
-        },
-        {
-          name: 'Hyderabad Branch',
-          code: 'HYD-03',
-          address: 'Survey No. 64, HITEC City, Madhapur',
-          city: 'Hyderabad',
-          state: 'Telangana',
-          latitude: 17.4483,
-          longitude: 78.3915,
-          radiusMeters: 500,
-          contactEmail: 'hyderabad.branch@wegrow.edu.in',
-          contactPhone: '+91 40 6789 2200',
-          isActive: true,
-        },
-      ]);
-      branches = await this.branchModel.find().populate('branchHeadId', 'name email').sort({ name: 1 }).lean();
-    }
 
     const countMap = new Map<string, number>();
     userCounts.forEach((c) => countMap.set(c._id, c.count));

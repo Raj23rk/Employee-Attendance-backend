@@ -27,7 +27,9 @@ export class UsersService {
       throw new ConflictException('User with this email or employee ID already exists');
     }
 
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
+    const plainPassword =
+      dto.password || this.generateEmployeePassword(dto.name || dto.email || dto.employeeId);
+    const hashedPassword = await bcrypt.hash(plainPassword, 10);
     const createdUser = await this.userModel.create({
       ...dto,
       email: dto.email.toLowerCase(),
@@ -56,8 +58,29 @@ export class UsersService {
     return {
       success: true,
       message: 'Employee onboarded successfully',
-      data: userObj,
+      data: {
+        ...userObj,
+        initialPassword: plainPassword,
+      },
     };
+  }
+
+  generateEmployeePassword(nameOrIdentifier: string): string {
+    const clean = (nameOrIdentifier.split('@')[0] || 'Emp').replace(/[^a-zA-Z]/g, '');
+    const prefix =
+      clean.length >= 3
+        ? clean.charAt(0).toUpperCase() + clean.slice(1, 3).toLowerCase()
+        : (clean.charAt(0).toUpperCase() + clean.slice(1) + 'xyz').slice(0, 3);
+    const digit1 = Math.floor(Math.random() * 9) + 1;
+    const symbols = ['#', '!', '$'];
+    const symbol = symbols[Math.floor(Math.random() * symbols.length)];
+    const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lower = 'abcdefghijklmnopqrstuvwxyz';
+    const l1 = upper[Math.floor(Math.random() * upper.length)];
+    const l2 = lower[Math.floor(Math.random() * lower.length)];
+    const digits2 = Math.floor(10 + Math.random() * 90);
+
+    return `WG@${prefix}${digit1}${symbol}${l1}${l2}${digits2}`;
   }
 
   async findById(id: string) {

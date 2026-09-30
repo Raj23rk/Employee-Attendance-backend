@@ -28,7 +28,15 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('Access denied: User has no role assigned');
     }
 
-    const hasRole = requiredRoles.includes(user.role);
+    const userRole = user.role;
+    const hasRole =
+      requiredRoles.includes(userRole) ||
+      (userRole === Role.CEO || userRole === Role.EXECUTIVE) || // Executive has universal supervisory access
+      ((userRole === Role.ADMIN || userRole === Role.SYSTEM_ADMIN) && requiredRoles.includes(Role.ADMIN)) ||
+      ((userRole === Role.HR || userRole === Role.HR_MANAGER) && (requiredRoles.includes(Role.HR) || requiredRoles.includes(Role.MANAGER))) ||
+      ((userRole === Role.MANAGER || userRole === Role.TEAM_MANAGER) && requiredRoles.includes(Role.MANAGER)) ||
+      (userRole === Role.ACCOUNTANT && (requiredRoles.includes(Role.HR) || requiredRoles.includes(Role.ADMIN)));
+
     if (!hasRole) {
       throw new ForbiddenException(
         `Access denied: requires one of [${requiredRoles.join(', ')}], current role is ${user.role}`,

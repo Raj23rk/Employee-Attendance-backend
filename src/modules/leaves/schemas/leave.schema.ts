@@ -67,3 +67,6 @@ export class Leave {
 }
 
 export const LeaveSchema = SchemaFactory.createForClass(Leave);
+LeaveSchema.index({ userId: 1, status: 1 });
+LeaveSchema.index({ status: 1, startDate: 1 });
+LeaveSchema.index({ startDate: 1, endDate: 1 });

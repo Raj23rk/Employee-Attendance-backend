@@ -17,9 +17,13 @@ export class CreateBranchDto {
   @IsString()
   city: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  state: string;
+  id?: string;
+
+  @IsOptional()
+  @IsString()
+  state?: string;
 
   @IsOptional()
   @IsNumber()

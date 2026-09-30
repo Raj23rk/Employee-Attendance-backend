@@ -17,7 +17,7 @@ export class Branch {
   @Prop({ required: true })
   city: string;
 
-  @Prop({ required: true })
+  @Prop({ default: 'Tamil Nadu' })
   state: string;
 
   @Prop({ default: 13.0827 }) // Default coordinates

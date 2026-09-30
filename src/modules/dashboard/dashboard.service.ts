@@ -52,9 +52,9 @@ export class DashboardService {
     const todayStr = this.getTodayString();
 
     const [todayAttendance, pendingTasks, balance, pendingLeavesCount] = await Promise.all([
-      this.attendanceModel.findOne({ userId: new Types.ObjectId(userId), date: todayStr }),
+      this.attendanceModel.findOne({ userId: new Types.ObjectId(userId), date: todayStr }).lean(),
       this.taskModel.countDocuments({ assigneeId: new Types.ObjectId(userId), status: { $ne: 'COMPLETED' } }),
-      this.balanceModel.findOne({ userId: new Types.ObjectId(userId) }),
+      this.balanceModel.findOne({ userId: new Types.ObjectId(userId) }).lean(),
       this.leaveModel.countDocuments({ userId: new Types.ObjectId(userId), status: LeaveStatus.PENDING }),
     ]);
 
@@ -130,7 +130,12 @@ export class DashboardService {
       ];
     }
 
-    const [users, total] = await Promise.all([
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+
+    const [users, total, branches] = await Promise.all([
       this.userModel
         .find(userFilter)
         .populate('managerId', 'name employeeId')
@@ -138,54 +143,44 @@ export class DashboardService {
         .skip(skip)
         .limit(limit)
         .sort({ name: 1 })
-        .exec(),
+        .lean(),
       this.userModel.countDocuments(userFilter),
+      this.branchModel.find({ isActive: true }).select('name').lean(),
     ]);
 
     const userIds = users.map((u) => u._id);
 
-    // Fetch today's attendance for these users
-    const attendances = await this.attendanceModel.find({
-      userId: { $in: userIds },
-      date: dateStr,
-    });
-    const attMap = new Map<string, AttendanceDocument>();
+    // Parallel fetch related data with .lean()
+    const [attendances, balances, monthlyAttendances, monthlyPermissions] = await Promise.all([
+      this.attendanceModel.find({ userId: { $in: userIds }, date: dateStr }).lean(),
+      this.balanceModel.find({ userId: { $in: userIds } }).lean(),
+      this.attendanceModel
+        .find({ userId: { $in: userIds }, date: { $gte: startStr, $lte: endStr } })
+        .select('userId isLate isLatePenaltyApplied status')
+        .lean(),
+      this.permissionModel
+        .find({ userId: { $in: userIds }, date: { $gte: startStr, $lte: endStr } })
+        .select('userId durationHours')
+        .lean(),
+    ]);
+
+    const attMap = new Map<string, any>();
     attendances.forEach((a) => attMap.set(a.userId.toString(), a));
 
-    // Fetch leave balances for these users
-    const balances = await this.balanceModel.find({
-      userId: { $in: userIds },
-    });
-    const balanceMap = new Map<string, LeaveBalanceDocument>();
+    const balanceMap = new Map<string, any>();
     balances.forEach((b) => balanceMap.set(b.userId.toString(), b));
 
-    // Aggregate monthly statistics
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth() + 1;
-    const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
-
-    const monthlyAttendances = await this.attendanceModel.find({
-      userId: { $in: userIds },
-      date: { $gte: startStr, $lte: endStr },
-    });
-
-    const monthlyPermissions = await this.permissionModel.find({
-      userId: { $in: userIds },
-      date: { $gte: startStr, $lte: endStr },
-    });
-
-    const rows = users.map((u) => {
+    const rows = users.map((u: any) => {
       const att = attMap.get(u._id.toString());
       const bal = balanceMap.get(u._id.toString());
-      const userAtts = monthlyAttendances.filter((a) => a.userId.toString() === u._id.toString());
-      const userPerms = monthlyPermissions.filter((p) => p.userId.toString() === u._id.toString());
+      const userAtts = monthlyAttendances.filter((a: any) => a.userId.toString() === u._id.toString());
+      const userPerms = monthlyPermissions.filter((p: any) => p.userId.toString() === u._id.toString());
 
-      const lateDays = userAtts.filter((a) => a.isLate).length;
-      const latePenaltyHalfDays = userAtts.filter((a) => a.isLatePenaltyApplied).length;
-      const presentDays = userAtts.filter((a) => a.status === AttendanceStatus.PRESENT).length;
-      const halfDays = userAtts.filter((a) => a.status === AttendanceStatus.HALF_DAY).length;
-      const permissionHours = userPerms.reduce((acc, p) => acc + p.durationHours, 0);
+      const lateDays = userAtts.filter((a: any) => a.isLate).length;
+      const latePenaltyHalfDays = userAtts.filter((a: any) => a.isLatePenaltyApplied).length;
+      const presentDays = userAtts.filter((a: any) => a.status === AttendanceStatus.PRESENT).length;
+      const halfDays = userAtts.filter((a: any) => a.status === AttendanceStatus.HALF_DAY).length;
+      const permissionHours = userPerms.reduce((acc: number, p: any) => acc + (p.durationHours || 0), 0);
 
       const checkInFormatted = att && att.checkInTime ? this.formatTime(att.checkInTime) : null;
       const checkOutFormatted = att && att.checkOutTime ? this.formatTime(att.checkOutTime) : null;
@@ -199,7 +194,7 @@ export class DashboardService {
         phone: u.phone || '-',
         gender: u.gender,
         dateOfJoining: u.dateOfJoining ? new Date(u.dateOfJoining).toISOString().split('T')[0] : 'N/A',
-        branch: (u as any).branch || 'Chennai Main Campus',
+        branch: u.branch || 'Chennai Main Campus',
         department: u.department,
         designation: u.designation,
         isActive: u.isActive,
@@ -237,8 +232,6 @@ export class DashboardService {
       };
     });
 
-    // Summary KPIs
-    const branches = await this.branchModel.find({ isActive: true }).exec();
     const branchList = branches.map((b) => b.name);
 
     return {
@@ -255,38 +248,33 @@ export class DashboardService {
 
   // 3. FULL EMPLOYEE DETAILS POPUP API
   async getEmployeeFullDetailsPopup(userId: string) {
-    const user = await this.userModel
-      .findById(userId)
-      .populate('managerId', 'name employeeId email designation')
-      .select('-password')
-      .exec();
-
-    if (!user) {
-      throw new NotFoundException('Employee not found');
-    }
-
     const todayStr = this.getTodayString();
-    const [todayAtt, balance, recentLeaves, recentPermissions] = await Promise.all([
-      this.attendanceModel.findOne({ userId: new Types.ObjectId(userId), date: todayStr }),
-      this.balanceModel.findOne({ userId: new Types.ObjectId(userId) }),
-      this.leaveModel.find({ userId: new Types.ObjectId(userId) }).sort({ createdAt: -1 }).limit(10),
-      this.permissionModel.find({ userId: new Types.ObjectId(userId) }).sort({ date: -1 }).limit(10),
-    ]);
-
     const currentYear = new Date().getFullYear();
     const currentMonth = new Date().getMonth() + 1;
     const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
     const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
 
-    const monthlyAttendances = await this.attendanceModel.find({
-      userId: new Types.ObjectId(userId),
-      date: { $gte: startStr, $lte: endStr },
-    });
+    const [user, todayAtt, balance, recentLeaves, recentPermissions, monthlyAttendances] = await Promise.all([
+      this.userModel
+        .findById(userId)
+        .populate('managerId', 'name employeeId email designation')
+        .select('-password')
+        .lean(),
+      this.attendanceModel.findOne({ userId: new Types.ObjectId(userId), date: todayStr }).lean(),
+      this.balanceModel.findOne({ userId: new Types.ObjectId(userId) }).lean(),
+      this.leaveModel.find({ userId: new Types.ObjectId(userId) }).sort({ createdAt: -1 }).limit(10).lean(),
+      this.permissionModel.find({ userId: new Types.ObjectId(userId) }).sort({ date: -1 }).limit(10).lean(),
+      this.attendanceModel.find({ userId: new Types.ObjectId(userId), date: { $gte: startStr, $lte: endStr } }).lean(),
+    ]);
 
-    const lateCount = monthlyAttendances.filter((a) => a.isLate).length;
-    const latePenaltyHalfDays = monthlyAttendances.filter((a) => a.isLatePenaltyApplied).length;
-    const presentCount = monthlyAttendances.filter((a) => a.status === AttendanceStatus.PRESENT).length;
-    const totalWorkingMinutes = monthlyAttendances.reduce((acc, a) => acc + (a.totalWorkingMinutes || 0), 0);
+    if (!user) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    const lateCount = monthlyAttendances.filter((a: any) => a.isLate).length;
+    const latePenaltyHalfDays = monthlyAttendances.filter((a: any) => a.isLatePenaltyApplied).length;
+    const presentCount = monthlyAttendances.filter((a: any) => a.status === AttendanceStatus.PRESENT).length;
+    const totalWorkingMinutes = monthlyAttendances.reduce((acc: number, a: any) => acc + (a.totalWorkingMinutes || 0), 0);
 
     return {
       success: true,
@@ -351,7 +339,7 @@ export class DashboardService {
 
   // 4. INDIVIDUAL EMPLOYEE REPORT DOWNLOAD (CSV / Summary)
   async downloadIndividualEmployeeReport(userId: string, month?: number, year?: number): Promise<string> {
-    const user = await this.userModel.findById(userId);
+    const user = await this.userModel.findById(userId).lean();
     if (!user) {
       throw new NotFoundException('Employee not found');
     }
@@ -363,18 +351,21 @@ export class DashboardService {
     const lastDay = new Date(y, m, 0).getDate();
     const endStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
-    const attendances = await this.attendanceModel
-      .find({
-        userId: new Types.ObjectId(userId),
-        date: { $gte: startStr, $lte: endStr },
-      })
-      .sort({ date: 1 })
-      .exec();
-
-    const permissions = await this.permissionModel.find({
-      userId: new Types.ObjectId(userId),
-      date: { $gte: startStr, $lte: endStr },
-    });
+    const [attendances, permissions] = await Promise.all([
+      this.attendanceModel
+        .find({
+          userId: new Types.ObjectId(userId),
+          date: { $gte: startStr, $lte: endStr },
+        })
+        .sort({ date: 1 })
+        .lean(),
+      this.permissionModel
+        .find({
+          userId: new Types.ObjectId(userId),
+          date: { $gte: startStr, $lte: endStr },
+        })
+        .lean(),
+    ]);
 
     const doj = user.dateOfJoining ? new Date(user.dateOfJoining).toISOString().split('T')[0] : 'N/A';
 
@@ -395,7 +386,7 @@ export class DashboardService {
       const dObj = new Date(y, m - 1, day);
       const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
 
-      const record = attendances.find((a) => a.date === dateStr);
+      const record = attendances.find((a: any) => a.date === dateStr);
       const status = record ? record.status : isWeekend ? 'WEEK_OFF' : 'ABSENT';
       const checkIn = record && record.checkInTime ? this.formatTime(record.checkInTime) : '-';
       const checkOut = record && record.checkOutTime ? this.formatTime(record.checkOutTime) : '-';
@@ -409,9 +400,9 @@ export class DashboardService {
       csv += `"${dateStr}","${status}","${checkIn}","${checkOut}","${workingHours}","${isLateStr}",${lateMins},"${penalty}","${location}",${notes}\n`;
     }
 
-    const totalLate = attendances.filter((a) => a.isLate).length;
-    const totalHalfDayDeductions = attendances.filter((a) => a.isLatePenaltyApplied).length;
-    const totalPermissionHours = permissions.reduce((acc, p) => acc + p.durationHours, 0);
+    const totalLate = attendances.filter((a: any) => a.isLate).length;
+    const totalHalfDayDeductions = attendances.filter((a: any) => a.isLatePenaltyApplied).length;
+    const totalPermissionHours = permissions.reduce((acc: number, p: any) => acc + (p.durationHours || 0), 0);
 
     csv += `\nSUMMARY METRICS\n`;
     csv += `Total Late Check-ins (Shift 9:40 AM): ${totalLate}\n`;
@@ -423,7 +414,7 @@ export class DashboardService {
 
   // 5. CELEBRATIONS
   async getCelebrations() {
-    const users = await this.userModel.find({ isActive: true }).select('name department branch avatarUrl dateOfBirth dateOfJoining').exec();
+    const users = await this.userModel.find({ isActive: true }).select('name department branch avatarUrl dateOfBirth dateOfJoining').lean();
     const now = new Date();
     const currentMonth = now.getMonth();
 
@@ -472,9 +463,10 @@ export class DashboardService {
   }
 
   async sendCelebrationWish(fromUserId: string, targetUserId: string, dto: SendCelebrationWishDto) {
-    const fromUser = await this.userModel.findById(fromUserId);
-
-    const targetUser = await this.userModel.findById(targetUserId);
+    const [fromUser, targetUser] = await Promise.all([
+      this.userModel.findById(fromUserId).select('name').lean(),
+      this.userModel.findById(targetUserId).select('name').lean(),
+    ]);
 
     if (!fromUser || !targetUser) {
       throw new NotFoundException('User not found');
@@ -510,7 +502,7 @@ export class DashboardService {
       .find({ date: { $gte: todayStr } })
       .sort({ date: 1 })
       .limit(5)
-      .exec();
+      .lean();
 
     if (holidays.length === 0) {
       holidays = [
@@ -553,7 +545,7 @@ export class DashboardService {
         toDate: { $gte: todayStr },
       })
       .populate('userId', 'name department designation branch avatarUrl')
-      .exec();
+      .lean();
 
     let members = leaves.map((l: any) => ({
       name: l.userId?.name || 'Employee',
@@ -574,10 +566,25 @@ export class DashboardService {
     };
   }
 
-  // 9. HOURS LOGGED CHART
+  // 9. HOURS LOGGED CHART (Optimized: 1 single batch query instead of 7 sequential roundtrips)
   async getHoursLoggedChart(userId: string) {
     const days = [];
     const now = new Date();
+    const oldestDate = new Date();
+    oldestDate.setDate(now.getDate() - 6);
+    const startDateStr = oldestDate.toISOString().split('T')[0];
+    const endDateStr = now.toISOString().split('T')[0];
+
+    const records = await this.attendanceModel
+      .find({
+        userId: new Types.ObjectId(userId),
+        date: { $gte: startDateStr, $lte: endDateStr },
+      })
+      .select('date status totalWorkingMinutes')
+      .lean();
+
+    const recordMap = new Map<string, any>();
+    records.forEach((r) => recordMap.set(r.date, r));
 
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
@@ -585,12 +592,8 @@ export class DashboardService {
       const dateStr = d.toISOString().split('T')[0];
       const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
 
-      const record = await this.attendanceModel.findOne({
-        userId: new Types.ObjectId(userId),
-        date: dateStr,
-      });
-
-      const hours = record ? Number((record.totalWorkingMinutes / 60).toFixed(1)) : 0;
+      const record = recordMap.get(dateStr);
+      const hours = record ? Number(((record.totalWorkingMinutes || 0) / 60).toFixed(1)) : 0;
 
       days.push({
         date: dateStr,

@@ -86,7 +86,7 @@ export class UsersService {
       .findById(userId)
       .populate('managerId', 'name email employeeId designation')
       .select('-password')
-      .exec();
+      .lean();
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -97,7 +97,7 @@ export class UsersService {
     const updated = await this.userModel
       .findByIdAndUpdate(userId, { $set: dto }, { new: true })
       .select('-password')
-      .exec();
+      .lean();
     return { success: true, message: 'Profile updated successfully', data: updated };
   }
 
@@ -143,7 +143,7 @@ export class UsersService {
         .skip(skip)
         .limit(limit)
         .sort({ name: 1 })
-        .exec(),
+        .lean(),
       this.userModel.countDocuments(filter),
     ]);
 

@@ -37,7 +37,7 @@ export class OrganizationService {
       .find(filter)
       .select('name employeeId email role department designation branch phone avatarUrl dateOfJoining')
       .sort({ name: 1 })
-      .exec();
+      .lean();
 
     return { success: true, count: users.length, data: users };
   }
@@ -47,10 +47,10 @@ export class OrganizationService {
     const allUsers = await this.userModel
       .find({ isActive: true })
       .select('name employeeId email role department designation branch managerId avatarUrl')
-      .exec();
+      .lean();
 
     const userMap = new Map<string, any>();
-    allUsers.forEach((u) => {
+    allUsers.forEach((u: any) => {
       userMap.set(u._id.toString(), {
         id: u._id,
         name: u.name,
@@ -59,7 +59,7 @@ export class OrganizationService {
         role: u.role,
         department: u.department,
         designation: u.designation,
-        branch: (u as any).branch || 'Chennai Main Campus',
+        branch: u.branch || 'Chennai Main Campus',
         avatarUrl: u.avatarUrl,
         managerId: u.managerId ? u.managerId.toString() : null,
         children: [],
@@ -80,7 +80,7 @@ export class OrganizationService {
 
   // 3. Departments list
   async getDepartments() {
-    let depts = await this.departmentModel.find().populate('leadId', 'name email designation').exec();
+    let depts = await this.departmentModel.find().populate('leadId', 'name email designation').lean();
 
     if (depts.length === 0) {
       depts = [
@@ -88,15 +88,21 @@ export class OrganizationService {
         await this.departmentModel.create({ name: 'Skill Campus', code: 'SKILL', description: 'Vocational training and student placement' }),
         await this.departmentModel.create({ name: 'B School', code: 'BSCH', description: 'Business management education' }),
         await this.departmentModel.create({ name: 'Executive & Admin', code: 'EXEC', description: 'Leadership and administrative operations' }),
-      ];
+      ] as any;
     }
 
     return { success: true, count: depts.length, data: depts };
   }
 
-  // 4. Multi-Branch Management (Initial 3 Branches + Dynamic Additions)
+  // 4. Multi-Branch Management (Initial 3 Branches + Dynamic Additions) - Optimized with single aggregation
   async getBranches() {
-    let branches = await this.branchModel.find().populate('branchHeadId', 'name email').sort({ name: 1 }).exec();
+    let [branches, userCounts] = await Promise.all([
+      this.branchModel.find().populate('branchHeadId', 'name email').sort({ name: 1 }).lean(),
+      this.userModel.aggregate([
+        { $match: { isActive: true } },
+        { $group: { _id: '$branch', count: { $sum: 1 } } },
+      ]),
+    ]);
 
     if (branches.length === 0) {
       // Seed default 3 company branches
@@ -141,22 +147,16 @@ export class OrganizationService {
           isActive: true,
         },
       ]);
-      branches = await this.branchModel.find().populate('branchHeadId', 'name email').sort({ name: 1 }).exec();
+      branches = await this.branchModel.find().populate('branchHeadId', 'name email').sort({ name: 1 }).lean();
     }
 
-    // Attach current employee count per branch
-    const branchStats = await Promise.all(
-      branches.map(async (b) => {
-        const employeeCount = await this.userModel.countDocuments({
-          $or: [{ branch: b.name }, { branchId: b._id }],
-          isActive: true,
-        });
-        return {
-          ...b.toObject(),
-          employeeCount,
-        };
-      }),
-    );
+    const countMap = new Map<string, number>();
+    userCounts.forEach((c) => countMap.set(c._id, c.count));
+
+    const branchStats = branches.map((b: any) => ({
+      ...b,
+      employeeCount: countMap.get(b.name) || 0,
+    }));
 
     return { success: true, count: branchStats.length, data: branchStats };
   }
@@ -183,6 +183,7 @@ export class OrganizationService {
 
     const branch = await this.branchModel.create({
       ...dto,
+      state: dto.state || 'Tamil Nadu',
       code: dto.code.toUpperCase(),
       branchHeadId: dto.branchHeadId ? new Types.ObjectId(dto.branchHeadId) : undefined,
     });

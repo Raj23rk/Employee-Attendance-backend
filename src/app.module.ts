@@ -41,6 +41,13 @@ import { SeedModule } from './modules/seed/seed.module';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('database.url'),
+        maxPoolSize: 50,
+        minPoolSize: 10,
+        socketTimeoutMS: 45000,
+        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 10000,
+        heartbeatFrequencyMS: 10000,
+        retryWrites: true,
       }),
     }),
     AuthModule,

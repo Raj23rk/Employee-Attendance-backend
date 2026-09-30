@@ -386,27 +386,26 @@ export class AttendanceService {
   // 3. TODAY'S STATUS & LIVE TIMER
   async getTodayStatus(userId: string) {
     const today = this.getTodayString();
-    const record = await this.attendanceModel.findOne({
-      userId: new Types.ObjectId(userId),
-      date: today,
-    });
-
-    const policy = await this.getPolicies();
-    const shiftPolicy = policy.data;
-
-    // Check user's monthly permission hours used
     const currentYear = new Date().getFullYear();
     const currentMonth = new Date().getMonth() + 1;
     const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
     const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
 
-    const monthlyPermissions = await this.permissionModel.find({
-      userId: new Types.ObjectId(userId),
-      date: { $gte: startStr, $lte: endStr },
-      status: { $in: [PermissionStatus.APPROVED, PermissionStatus.PENDING] },
-    });
+    const [record, policy, monthlyPermissions] = await Promise.all([
+      this.attendanceModel.findOne({
+        userId: new Types.ObjectId(userId),
+        date: today,
+      }).lean(),
+      this.getPolicies(),
+      this.permissionModel.find({
+        userId: new Types.ObjectId(userId),
+        date: { $gte: startStr, $lte: endStr },
+        status: { $in: [PermissionStatus.APPROVED, PermissionStatus.PENDING] },
+      }).select('durationHours').lean(),
+    ]);
 
-    const usedPermissionHours = monthlyPermissions.reduce((acc, p) => acc + p.durationHours, 0);
+    const shiftPolicy = policy.data;
+    const usedPermissionHours = monthlyPermissions.reduce((acc: number, p: any) => acc + (p.durationHours || 0), 0);
 
     if (!record || !record.checkInTime) {
       return {
@@ -500,9 +499,9 @@ export class AttendanceService {
         userId: new Types.ObjectId(userId),
         date: { $gte: startStr, $lte: endStr },
       })
-      .exec();
+      .lean();
 
-    const recordMap = new Map<string, AttendanceDocument>();
+    const recordMap = new Map<string, any>();
     records.forEach((r) => recordMap.set(r.date, r));
 
     const todayStr = this.getTodayString();

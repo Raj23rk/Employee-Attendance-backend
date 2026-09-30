@@ -156,4 +156,54 @@ export class UsersService {
       data: users,
     };
   }
+
+  async delete(id: string, currentUserId: string) {
+    if (id === currentUserId) {
+      throw new BadRequestException('You cannot delete your own logged-in account');
+    }
+    const user = await this.userModel.findById(id);
+    if (!user) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    await Promise.all([
+      this.userModel.findByIdAndDelete(id),
+      this.leaveBalanceModel.deleteMany({ userId: id }),
+    ]);
+
+    return {
+      success: true,
+      message: `Employee ${user.name} (${user.employeeId}) removed successfully`,
+    };
+  }
+
+  async cleanSeedData(currentUserId: string) {
+    const seedEmails = [
+      'priya.sharma@wegrow.edu.in',
+      'vijay.kumaran@wegrow.edu.in',
+      'manager@wegrow.edu.in',
+      'ceo@wegrow.edu.in',
+      'rajkumar@wegrow.edu.in',
+    ];
+
+    const usersToDelete = await this.userModel.find({
+      email: { $in: seedEmails },
+      _id: { $ne: currentUserId },
+    });
+
+    const idsToDelete = usersToDelete.map((u) => u._id);
+
+    if (idsToDelete.length > 0) {
+      await Promise.all([
+        this.userModel.deleteMany({ _id: { $in: idsToDelete } }),
+        this.leaveBalanceModel.deleteMany({ userId: { $in: idsToDelete } }),
+      ]);
+    }
+
+    return {
+      success: true,
+      message: `Successfully removed ${idsToDelete.length} static demo employee accounts`,
+      deletedEmployees: usersToDelete.map((u) => ({ id: u._id, name: u.name, email: u.email })),
+    };
+  }
 }

@@ -3,6 +3,8 @@ import {
   Get,
   Post,
   Put,
+  Delete,
+  Param,
   Body,
   Query,
   UseGuards,
@@ -64,5 +66,22 @@ export class UsersController {
   @ApiOperation({ summary: 'Onboard/Register new employee and assign role (Admin, HR, Manager, CEO)' })
   async create(@Body() dto: CreateUserDto) {
     return this.usersService.create(dto);
+  }
+
+  @Post('clean-seed-data')
+  @Roles(Role.ADMIN, Role.HR, Role.CEO)
+  @ApiOperation({ summary: 'One-click remove all static demo seed employees from database' })
+  async cleanSeedData(@CurrentUser('id') currentUserId: string) {
+    return this.usersService.cleanSeedData(currentUserId);
+  }
+
+  @Delete(':id')
+  @Roles(Role.ADMIN, Role.HR, Role.CEO)
+  @ApiOperation({ summary: 'Delete employee account and their leave records' })
+  async deleteUser(
+    @Param('id') id: string,
+    @CurrentUser('id') currentUserId: string,
+  ) {
+    return this.usersService.delete(id, currentUserId);
   }
 }

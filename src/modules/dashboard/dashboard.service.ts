@@ -35,12 +35,18 @@ export class DashboardService {
   ) {}
 
   private getTodayString(): string {
-    return new Date().toISOString().split('T')[0];
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
   }
 
   private formatTime(date: Date | null | undefined): string | null {
     if (!date) return null;
     return new Date(date).toLocaleTimeString('en-US', {
+      timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       minute: '2-digit',
       hour12: true,

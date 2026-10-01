@@ -73,13 +73,18 @@ export class AttendanceService {
   ) {}
 
   private getTodayString(): string {
-    const d = new Date();
-    return d.toISOString().split('T')[0];
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
   }
 
   private formatTime(date: Date | null | undefined): string | null {
     if (!date) return null;
     return new Date(date).toLocaleTimeString('en-US', {
+      timeZone: 'Asia/Kolkata',
       hour: '2-digit',
       minute: '2-digit',
       hour12: true,
@@ -195,9 +200,14 @@ export class AttendanceService {
     }
 
     // Evaluate Late Arrival (Past 09:40 AM)
-    // Convert current time to today's HH:mm
-    const currentHours = now.getHours();
-    const currentMinutes = now.getMinutes();
+    // Convert current time to today's HH:mm in Asia/Kolkata timezone
+    const istTimeStr = now.toLocaleTimeString('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const [currentHours, currentMinutes] = istTimeStr.split(':').map(Number);
     const currentTotalMinutes = currentHours * 60 + currentMinutes;
 
     const [startH, startM] = (policy.workStartTime || '09:40').split(':').map(Number);

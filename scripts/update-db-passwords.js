@@ -19,7 +19,8 @@ const userCredentials = [
   { email: 'navenn919@gmail.com', password: 'WG@Nav6$Qr31' },
   { email: 'prabhu1996prabha@gmail.com', password: 'WG@Pra9#Tk54' },
   { email: 'nandhakumar19052005@gmail.com', password: 'WG@Nan3!Vz76' },
-  { email: 'pandiselvam.pps@gmail.com', password: 'WG@Pan8$Hm25' }
+  { email: 'pandiselvam.pps@gmail.com', password: 'WG@Pan8$Hm25' },
+  { email: 'ajithkumar.bba.anjac@gmail.com', password: 'WG@Aji4#Qx82' }
 ];
 
 // Helper to generate a password following the pattern: WG@<3 letters><1 digit><symbol><2 letters><2 digits>

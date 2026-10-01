@@ -71,8 +71,10 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload);
     const refreshToken = crypto.randomBytes(40).toString('hex');
 
-    user.refreshToken = refreshToken;
-    await user.save();
+    await this.userModel.updateOne(
+      { _id: user._id },
+      { $set: { refreshToken } },
+    );
 
     return {
       success: true,
@@ -118,8 +120,10 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload);
     const newRefreshToken = crypto.randomBytes(40).toString('hex');
 
-    user.refreshToken = newRefreshToken;
-    await user.save();
+    await this.userModel.updateOne(
+      { _id: user._id },
+      { $set: { refreshToken: newRefreshToken } },
+    );
 
     return {
       success: true,

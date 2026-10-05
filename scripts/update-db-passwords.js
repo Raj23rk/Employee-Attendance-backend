@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 
 const userCredentials = [
+  { email: 'vijay909232@gmail.com', employeeId: 'WG-EMP-023', password: 'WG@Vij7#Lp39' },
   { email: 'www.shiekabdulla78@gmail.com', employeeId: 'WG-EMP-022', password: 'WG@Shi5#Qx72' },
   { email: 'dr.thavabalan@gmail.com', employeeId: 'WG26001', password: 'WG@Tha7!Nx58' },
   { email: 'lakshmipriya@psr.edu.in', employeeId: 'WG26002', password: 'WG@Lak5$Rt39' },

@@ -120,6 +120,14 @@ export class UsersService {
     return { success: true, message: 'Profile updated successfully', data: updated };
   }
 
+  async updateAvatar(userId: string, avatarUrl: string) {
+    const user = await this.userModel
+      .findByIdAndUpdate(userId, { $set: { avatarUrl } }, { new: true })
+      .select('-password')
+      .lean();
+    return { success: true, message: 'Profile picture updated successfully', data: user };
+  }
+
   async changePassword(userId: string, dto: ChangePasswordDto) {
     const user = await this.userModel.findById(userId).select('+password').exec();
     if (!user) {

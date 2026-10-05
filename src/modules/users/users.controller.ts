@@ -8,8 +8,12 @@ import {
   Body,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -38,6 +42,28 @@ export class UsersController {
     @Body() dto: UpdateProfileDto,
   ) {
     return this.usersService.updateMe(userId, dto);
+  }
+
+  @Post('me/avatar')
+  @UseInterceptors(
+    FileInterceptor('avatar', {
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  @ApiOperation({ summary: 'Upload or update profile picture avatar (multipart file or JSON avatarUrl/image)' })
+  async uploadAvatar(
+    @CurrentUser('id') userId: string,
+    @UploadedFile() file?: any,
+    @Body() body?: { avatarUrl?: string; image?: string },
+  ) {
+    let url = body?.avatarUrl || body?.image;
+    if (file && file.buffer) {
+      url = `data:${file.mimetype || 'image/png'};base64,${file.buffer.toString('base64')}`;
+    }
+    if (!url) {
+      throw new BadRequestException('Please provide an image file or avatarUrl in request body');
+    }
+    return this.usersService.updateAvatar(userId, url);
   }
 
   @Put('me/change-password')

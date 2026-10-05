@@ -31,7 +31,7 @@ export class RolesGuard implements CanActivate {
     const userRole = user.role;
     const hasRole =
       requiredRoles.includes(userRole) ||
-      (userRole === Role.CEO || userRole === Role.EXECUTIVE) || // Executive has universal supervisory access
+      (userRole === Role.CEO || userRole === Role.EXECUTIVE || userRole === Role.MD || userRole === Role.GM) || // Executive / MD / GM have universal supervisory access
       ((userRole === Role.ADMIN || userRole === Role.SYSTEM_ADMIN) && requiredRoles.includes(Role.ADMIN)) ||
       ((userRole === Role.HR || userRole === Role.HR_MANAGER) && (requiredRoles.includes(Role.HR) || requiredRoles.includes(Role.MANAGER))) ||
       ((userRole === Role.MANAGER || userRole === Role.TEAM_MANAGER) && requiredRoles.includes(Role.MANAGER)) ||

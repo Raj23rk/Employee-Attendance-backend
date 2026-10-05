@@ -1,6 +1,8 @@
 export enum Role {
   CEO = 'CEO',
   EXECUTIVE = 'EXECUTIVE',
+  MD = 'MD',
+  GM = 'GM',
   ADMIN = 'ADMIN',
   SYSTEM_ADMIN = 'SYSTEM_ADMIN',
   HR = 'HR',
@@ -10,3 +12,4 @@ export enum Role {
   EMPLOYEE = 'EMPLOYEE',
   ACCOUNTANT = 'ACCOUNTANT',
 }
+

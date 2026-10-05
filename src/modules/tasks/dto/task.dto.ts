@@ -22,9 +22,25 @@ export class CreateTaskDto {
   @IsDateString()
   dueDate?: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  assigneeId: string;
+  assigneeId?: string;
+
+  @IsOptional()
+  @IsString()
+  assignedTo?: string;
+
+  @IsOptional()
+  @IsString()
+  staffName?: string;
+
+  @IsOptional()
+  @IsString()
+  assigneeName?: string;
+
+  @IsOptional()
+  @IsString()
+  assigneeEmail?: string;
 }
 
 export class UpdateTaskStatusDto {

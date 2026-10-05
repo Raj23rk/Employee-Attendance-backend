@@ -16,7 +16,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateProfileDto, ChangePasswordDto } from './dto/users.dto';
+import { CreateUserDto, UpdateProfileDto, ChangePasswordDto, UpdateUserPasswordDto } from './dto/users.dto';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -49,6 +49,28 @@ export class UsersController {
     return this.usersService.changePassword(userId, dto);
   }
 
+  @Get('staff-list')
+  @ApiOperation({ summary: 'Get all active staff names and details for dropdowns / task assignments' })
+  async getStaffList(
+    @Query('search') search?: string,
+    @Query('department') department?: string,
+    @Query('branch') branch?: string,
+    @Query('role') role?: string,
+  ) {
+    return this.usersService.getStaffList({ search, department, branch, role });
+  }
+
+  @Get('staff')
+  @ApiOperation({ summary: 'Alias: Get all active staff names and details' })
+  async getStaffAlias(
+    @Query('search') search?: string,
+    @Query('department') department?: string,
+    @Query('branch') branch?: string,
+    @Query('role') role?: string,
+  ) {
+    return this.usersService.getStaffList({ search, department, branch, role });
+  }
+
   @Get()
   @Roles(Role.ADMIN, Role.HR, Role.CEO)
   @ApiOperation({ summary: 'List all employees with search and department filter (Admin, HR, CEO)' })
@@ -75,6 +97,40 @@ export class UsersController {
     return this.usersService.cleanSeedData(currentUserId);
   }
 
+  @Post('update-password')
+  @Roles(Role.ADMIN, Role.HR, Role.MANAGER, Role.CEO)
+  @ApiOperation({ summary: 'Admin / HR / Manager / CEO update password for any user by email, employeeId, or userId' })
+  async updatePasswordPost(@Body() dto: UpdateUserPasswordDto) {
+    return this.usersService.updatePasswordDirect(dto);
+  }
+
+  @Put('update-password')
+  @Roles(Role.ADMIN, Role.HR, Role.MANAGER, Role.CEO)
+  @ApiOperation({ summary: 'Admin / HR / Manager / CEO update password for any user by email, employeeId, or userId' })
+  async updatePasswordPut(@Body() dto: UpdateUserPasswordDto) {
+    return this.usersService.updatePasswordDirect(dto);
+  }
+
+  @Put(':id/password')
+  @Roles(Role.ADMIN, Role.HR, Role.MANAGER, Role.CEO)
+  @ApiOperation({ summary: 'Admin / HR / Manager / CEO update user password by userId' })
+  async updateUserPassword(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserPasswordDto,
+  ) {
+    return this.usersService.updatePasswordDirect(dto, id);
+  }
+
+  @Put(':id/update-password')
+  @Roles(Role.ADMIN, Role.HR, Role.MANAGER, Role.CEO)
+  @ApiOperation({ summary: 'Admin / HR / Manager / CEO update user password by userId' })
+  async updateUserPasswordAlt(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserPasswordDto,
+  ) {
+    return this.usersService.updatePasswordDirect(dto, id);
+  }
+
   @Delete(':id')
   @Roles(Role.ADMIN, Role.HR, Role.CEO)
   @ApiOperation({ summary: 'Delete employee account and their leave records' })
@@ -85,3 +141,4 @@ export class UsersController {
     return this.usersService.delete(id, currentUserId);
   }
 }
+

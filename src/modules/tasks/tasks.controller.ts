@@ -5,6 +5,7 @@ import {
   Patch,
   Param,
   Body,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
@@ -22,6 +23,16 @@ import { CreateTaskDto, UpdateTaskStatusDto } from './dto/task.dto';
 @Controller('api/v1/tasks')
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'Get all company tasks grouped by Kanban columns (with filters)' })
+  async getAllTasks(
+    @Query('project') project?: string,
+    @Query('assigneeId') assigneeId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.tasksService.getAllTasksGrouped({ project, assigneeId, status });
+  }
 
   @Get('my')
   @ApiOperation({ summary: 'Get tasks assigned to current user grouped by Kanban columns' })

@@ -25,14 +25,26 @@ export class NotificationsService {
     private notificationModel: Model<NotificationDocument>,
     private configService: ConfigService,
   ) {
-    const apiKey = this.configService.get<string>('resend.apiKey');
-    if (apiKey && apiKey !== 're_demo_placeholder_key') {
+    this.initResend();
+  }
+
+  private initResend() {
+    const apiKey = this.configService.get<string>('resend.apiKey') || process.env.RESEND_API_KEY;
+    if (apiKey && apiKey !== 're_demo_placeholder_key' && apiKey.startsWith('re_')) {
       try {
         this.resendClient = new Resend(apiKey);
+        this.logger.log('Resend client initialized successfully with API key');
       } catch (err) {
         this.logger.warn(`Failed to initialize Resend client: ${err.message}`);
       }
     }
+  }
+
+  getResendClient(): Resend | null {
+    if (!this.resendClient) {
+      this.initResend();
+    }
+    return this.resendClient;
   }
 
   // Interpolate placeholders like {{name}} with payload values
@@ -68,8 +80,9 @@ export class NotificationsService {
         this.logger.warn(`Notification template ${templateCode} not found in database. Using fallback.`);
       }
 
-      if (this.resendClient) {
-        await this.resendClient.emails.send({
+      const client = this.getResendClient();
+      if (client) {
+        await client.emails.send({
           from: 'HR Portal <onboarding@resend.dev>',
           to,
           subject,

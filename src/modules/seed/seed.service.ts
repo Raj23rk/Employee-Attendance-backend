@@ -104,6 +104,13 @@ export class SeedService implements OnApplicationBootstrap {
         bodyHtml: '<h3>Dear {{recipientName}},</h3><p>{{senderName}} sent you a celebratory wish:</p><blockquote style="font-size: 16px; color: #2563eb;">{{message}}</blockquote>',
         variables: ['recipientName', 'senderName', 'message'],
       },
+      {
+        code: 'TASK_ASSIGNED',
+        title: 'New Task Assignment',
+        subject: 'New Task Assigned: {{taskTitle}} 📋',
+        bodyHtml: '<h3>Hello {{assigneeName}},</h3><p>A new task has been assigned to you on the <strong>Tasks & Kanban Board</strong>:</p><div style="background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 14px; margin: 14px 0; border-radius: 4px;"><h3 style="margin: 0 0 8px 0; color: #0f172a;">{{taskTitle}}</h3><p style="margin: 4px 0; color: #475569;"><strong>Project:</strong> {{project}}</p><p style="margin: 4px 0; color: #475569;"><strong>Priority:</strong> <span style="color: #ea580c; font-weight: bold;">{{priority}}</span></p><p style="margin: 4px 0; color: #475569;"><strong>Due Date:</strong> {{dueDate}}</p><p style="margin: 4px 0; color: #475569;"><strong>Assigned By:</strong> {{assignedByName}}</p><p style="margin: 8px 0 0 0; color: #334155;"><strong>Description:</strong> {{description}}</p></div><p>Please log in to your portal to manage your task on the Kanban board.</p>',
+        variables: ['assigneeName', 'taskTitle', 'project', 'priority', 'dueDate', 'assignedByName', 'description'],
+      },
     ];
 
     for (const t of templates) {

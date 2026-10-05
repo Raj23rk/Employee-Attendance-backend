@@ -8,7 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { User, UserDocument } from './schemas/user.schema';
-import { CreateUserDto, UpdateProfileDto, ChangePasswordDto } from './dto/users.dto';
+import { CreateUserDto, UpdateProfileDto, ChangePasswordDto, UpdateUserPasswordDto } from './dto/users.dto';
 import { LeaveBalance, LeaveBalanceDocument } from '../leaves/schemas/leave-balance.schema';
 import { Gender } from '../../common/enums/gender.enum';
 
@@ -137,6 +137,47 @@ export class UsersService {
     return { success: true, message: 'Password changed successfully' };
   }
 
+  async updatePasswordDirect(dto: UpdateUserPasswordDto, targetId?: string) {
+    const passwordToSet = dto.password || dto.newPassword;
+    if (!passwordToSet) {
+      throw new BadRequestException('Password or newPassword is required');
+    }
+    if (passwordToSet.length < 6) {
+      throw new BadRequestException('Password must be at least 6 characters long');
+    }
+
+    const id = targetId || dto.userId;
+    let query: any = {};
+    if (id) {
+      query._id = id;
+    } else if (dto.email) {
+      query.email = dto.email.toLowerCase().trim();
+    } else if (dto.employeeId) {
+      query.employeeId = dto.employeeId.trim();
+    } else {
+      throw new BadRequestException('Please provide userId, email, or employeeId to identify the user');
+    }
+
+    const user = await this.userModel.findOne(query).select('+password').exec();
+    if (!user) {
+      throw new NotFoundException('User account not found');
+    }
+
+    user.password = await bcrypt.hash(passwordToSet, 10);
+    await user.save();
+
+    return {
+      success: true,
+      message: `Password for ${user.name} (${user.email}) updated successfully`,
+      data: {
+        userId: user._id,
+        email: user.email,
+        employeeId: user.employeeId,
+        name: user.name,
+      },
+    };
+  }
+
   async findAll(query: { search?: string; department?: string; page?: number; limit?: number }) {
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.max(1, Number(query.limit) || 20);
@@ -173,6 +214,40 @@ export class UsersService {
       limit,
       totalPages: Math.ceil(total / limit),
       data: users,
+    };
+  }
+
+  async getStaffList(query?: { search?: string; department?: string; branch?: string; role?: string }) {
+    const filter: any = { isActive: true };
+
+    if (query?.department && query.department !== 'ALL') {
+      filter.department = query.department;
+    }
+    if (query?.branch && query.branch !== 'ALL') {
+      filter.branch = query.branch;
+    }
+    if (query?.role && query.role !== 'ALL') {
+      filter.role = query.role;
+    }
+    if (query?.search) {
+      filter.$or = [
+        { name: { $regex: query.search, $options: 'i' } },
+        { email: { $regex: query.search, $options: 'i' } },
+        { employeeId: { $regex: query.search, $options: 'i' } },
+        { designation: { $regex: query.search, $options: 'i' } },
+      ];
+    }
+
+    const list = await this.userModel
+      .find(filter)
+      .select('name employeeId email role department branch designation avatarUrl phone gender dateOfJoining')
+      .sort({ name: 1 })
+      .lean();
+
+    return {
+      success: true,
+      count: list.length,
+      data: list,
     };
   }
 

@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 
 const userCredentials = [
+  { email: 'dr.thavabalan@gmail.com', employeeId: 'WG26001', password: 'WG@Tha7!Nx58' },
+  { email: 'lakshmipriya@psr.edu.in', employeeId: 'WG26002', password: 'WG@Lak5$Rt39' },
   { email: 'ak45ashokkumar@gmail.com', password: 'WG@Aka5#Rx93' },
   { email: 'srisaigopi31@gmail.com', password: 'WG@Sri7!Qp46' },
   { email: 'kumarrk23dev@gmail.com', password: 'WG@Kum2$Yx85' },
@@ -55,16 +57,22 @@ async function updatePasswordsInDatabase() {
   let updatedCount = 0;
   for (const item of userCredentials) {
     const hashedPassword = await bcrypt.hash(item.password, 10);
+    const query = {
+      $or: [
+        { email: item.email.toLowerCase() },
+        ...(item.employeeId ? [{ employeeId: item.employeeId }] : [])
+      ]
+    };
     const result = await usersCollection.updateOne(
-      { email: item.email.toLowerCase() },
+      query,
       { $set: { password: hashedPassword } }
     );
 
     if (result.matchedCount > 0) {
-      console.log(`[UPDATED] ${item.email} -> ${item.password}`);
+      console.log(`[UPDATED] ${item.email} (${item.employeeId || 'no empId'}) -> ${item.password}`);
       updatedCount++;
     } else {
-      console.log(`[NOT FOUND IN DB] ${item.email} (Password: ${item.password})`);
+      console.log(`[NOT FOUND IN DB] ${item.email} (${item.employeeId || 'no empId'}) (Password: ${item.password})`);
     }
   }
 

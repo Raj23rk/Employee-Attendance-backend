@@ -156,7 +156,8 @@ export class AttendanceService {
       date: today,
     });
 
-    if (record && record.checkInTime) {
+    // Only consider already checked in if checkInTime exists AND checkOutTime is not set
+    if (record && record.checkInTime && (!record.checkOutTime || new Date(record.checkOutTime).getTime() <= new Date(record.checkInTime).getTime())) {
       return {
         success: true,
         message: 'Already punched in today',
@@ -256,6 +257,9 @@ export class AttendanceService {
         userId: new Types.ObjectId(userId),
         date: today,
         checkInTime: now,
+        checkOutTime: null,
+        checkOutLocation: null,
+        totalWorkingMinutes: 0,
         status,
         source: AttendanceSource.WEB,
         latitude: dto.latitude,
@@ -274,6 +278,9 @@ export class AttendanceService {
       });
     } else {
       record.checkInTime = now;
+      record.checkOutTime = null as any;
+      record.checkOutLocation = null as any;
+      record.totalWorkingMinutes = 0;
       record.status = status;
       record.latitude = dto.latitude;
       record.longitude = dto.longitude;
@@ -445,7 +452,7 @@ export class AttendanceService {
       };
     }
 
-    const isCheckedOut = !!record.checkOutTime;
+    const isCheckedOut = !!record.checkOutTime && new Date(record.checkOutTime).getTime() > new Date(record.checkInTime).getTime();
     const endTime = isCheckedOut ? new Date(record.checkOutTime) : new Date();
     const diffMs = Math.max(0, endTime.getTime() - new Date(record.checkInTime).getTime());
     const totalSeconds = Math.floor(diffMs / 1000);
@@ -460,9 +467,9 @@ export class AttendanceService {
       checkedIn: !isCheckedOut,
       isCheckedIn: !isCheckedOut,
       checkInTime: this.formatTime(record.checkInTime),
-      checkOutTime: this.formatTime(record.checkOutTime),
+      checkOutTime: isCheckedOut ? this.formatTime(record.checkOutTime) : null,
       rawCheckInTime: record.checkInTime,
-      rawCheckOutTime: record.checkOutTime,
+      rawCheckOutTime: isCheckedOut ? record.checkOutTime : null,
       startedAt: new Date(record.checkInTime).getTime(),
       break: '01:00',
       workingHours: elapsedMinutes,

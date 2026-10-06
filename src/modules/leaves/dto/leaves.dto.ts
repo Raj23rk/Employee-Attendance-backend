@@ -22,10 +22,18 @@ export class ApplyLeaveDto {
   @IsString()
   toDate: string; // YYYY-MM-DD
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsNumber()
   @Min(0.5)
-  days: number;
+  days?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isHalfDay?: boolean;
+
+  @IsOptional()
+  @IsString()
+  halfDaySession?: string; // 'FIRST_HALF' | 'SECOND_HALF' | 'MORNING' | 'AFTERNOON'
 
   @IsNotEmpty()
   @IsString()

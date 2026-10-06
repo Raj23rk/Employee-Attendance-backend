@@ -55,7 +55,7 @@ export class LeavesService {
 
     const monthlyCasualLeaves = await this.leaveModel.find({
       userId: new Types.ObjectId(userId),
-      leaveType: LeaveType.CASUAL,
+      leaveType: { $in: [LeaveType.CASUAL, LeaveType.HALF_DAY] },
       status: { $in: [LeaveStatus.APPROVED, LeaveStatus.PENDING] },
       $or: [
         { fromDate: { $gte: monthStartStr, $lte: monthEndStr } },
@@ -79,12 +79,16 @@ export class LeavesService {
     };
   }
 
-  // 2. APPLY LEAVE (With 1 CL / Month Quota & Medical Certificate Mandatory for Sick Leave)
+  // 2. APPLY LEAVE (With 1 CL / Month Quota, Half Day option & Medical Certificate Mandatory for Sick Leave)
   async applyLeave(userId: string, dto: ApplyLeaveDto) {
     const user = await this.userModel.findById(userId);
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    const isHalfDay = dto.isHalfDay || dto.leaveType === LeaveType.HALF_DAY;
+    const requestedDays = isHalfDay ? 0.5 : (dto.days || 1);
+    const halfDaySession = dto.halfDaySession || (isHalfDay ? 'FIRST_HALF' : '');
 
     // Gender-based Parental Leave Validations
     if (dto.leaveType === LeaveType.MATERNITY) {
@@ -97,7 +101,7 @@ export class LeavesService {
       if (user.gender !== Gender.MALE) {
         throw new BadRequestException('Paternity leave is applicable only for male employees');
       }
-      if (dto.days > 3) {
+      if (requestedDays > 3) {
         throw new BadRequestException('Paternity leave cannot exceed 3 paid days per application');
       }
     }
@@ -121,7 +125,7 @@ export class LeavesService {
 
     let isLop = false;
     let lopDays = 0;
-    let paidDays = dto.days;
+    let paidDays = requestedDays;
     let lopReason = '';
 
     const medCertUrl = dto.medicalCertificateUrl || dto.documentUrl || '';
@@ -130,20 +134,20 @@ export class LeavesService {
     if (dto.leaveType === LeaveType.SICK) {
       if (!medCertUrl || medCertUrl.trim() === '') {
         isLop = true;
-        lopDays = dto.days;
+        lopDays = requestedDays;
         paidDays = 0;
         lopReason = 'Medical certificate not uploaded for sick leave (Treated as Loss of Pay)';
-      } else if (balance.sick < dto.days) {
+      } else if (balance.sick < requestedDays) {
         const availableSick = Math.max(0, balance.sick);
         paidDays = availableSick;
-        lopDays = dto.days - availableSick;
+        lopDays = requestedDays - availableSick;
         isLop = true;
         lopReason = `Insufficient sick leave balance (${balance.sick} available, ${lopDays} days LOP)`;
       }
     }
 
-    // Rule 2: Casual Leave: 1 leave per calendar month. Excess days are LOP.
-    if (dto.leaveType === LeaveType.CASUAL) {
+    // Rule 2: Casual Leave & Half Day: 1 leave per calendar month. Excess days are LOP.
+    if (dto.leaveType === LeaveType.CASUAL || dto.leaveType === LeaveType.HALF_DAY) {
       const fromDateObj = new Date(dto.fromDate);
       const m = fromDateObj.getMonth() + 1;
       const y = fromDateObj.getFullYear();
@@ -152,7 +156,7 @@ export class LeavesService {
 
       const existingMonthlyCasual = await this.leaveModel.find({
         userId: new Types.ObjectId(userId),
-        leaveType: LeaveType.CASUAL,
+        leaveType: { $in: [LeaveType.CASUAL, LeaveType.HALF_DAY] },
         status: { $in: [LeaveStatus.APPROVED, LeaveStatus.PENDING] },
         $or: [
           { fromDate: { $gte: monthStartStr, $lte: monthEndStr } },
@@ -163,9 +167,9 @@ export class LeavesService {
       const alreadyUsedThisMonth = existingMonthlyCasual.reduce((acc, l) => acc + (l.paidDays || 0), 0);
       const remainingCasualQuotaThisMonth = Math.max(0, 1 - alreadyUsedThisMonth);
 
-      if (dto.days > remainingCasualQuotaThisMonth) {
-        paidDays = Math.min(dto.days, remainingCasualQuotaThisMonth);
-        lopDays = dto.days - paidDays;
+      if (requestedDays > remainingCasualQuotaThisMonth) {
+        paidDays = Math.min(requestedDays, remainingCasualQuotaThisMonth);
+        lopDays = requestedDays - paidDays;
         isLop = true;
         lopReason = alreadyUsedThisMonth >= 1
           ? 'Monthly casual leave limit (1 day/month) already used for this month. Excess converted to LOP.'
@@ -174,7 +178,7 @@ export class LeavesService {
 
       if (paidDays > 0 && balance.casual < paidDays) {
         paidDays = Math.max(0, balance.casual);
-        lopDays = dto.days - paidDays;
+        lopDays = requestedDays - paidDays;
         isLop = true;
         lopReason = `Insufficient casual balance. ${paidDays} paid, ${lopDays} LOP.`;
       }
@@ -183,7 +187,7 @@ export class LeavesService {
     // Rule 3: Annual / Loss of pay rules
     if (dto.leaveType === LeaveType.LOSS_OF_PAY) {
       isLop = true;
-      lopDays = dto.days;
+      lopDays = requestedDays;
       paidDays = 0;
       lopReason = 'Direct Loss of Pay (Unpaid) application';
     }
@@ -193,7 +197,9 @@ export class LeavesService {
       leaveType: dto.leaveType,
       fromDate: dto.fromDate,
       toDate: dto.toDate,
-      days: dto.days,
+      days: requestedDays,
+      isHalfDay,
+      halfDaySession,
       paidDays,
       lopDays,
       isLop,
@@ -213,7 +219,7 @@ export class LeavesService {
         await this.notificationsService.createInAppNotification(
           manager._id.toString(),
           'New Leave Application',
-          `${user.name} applied for ${dto.days} day(s) of ${dto.leaveType} leave (${isLop ? `LOP: ${lopDays}d` : 'Paid'}).`,
+          `${user.name} applied for ${requestedDays} day(s) of ${dto.leaveType} leave ${isHalfDay ? `(${halfDaySession})` : ''} (${isLop ? `LOP: ${lopDays}d` : 'Paid'}).`,
           'INFO',
           '/leaves/team-requests',
         );
@@ -442,7 +448,7 @@ export class LeavesService {
     });
     if (!balance) return;
 
-    if (leaveType === LeaveType.CASUAL) balance.casual = Math.max(0, balance.casual - paidDays);
+    if (leaveType === LeaveType.CASUAL || leaveType === LeaveType.HALF_DAY) balance.casual = Math.max(0, balance.casual - paidDays);
     else if (leaveType === LeaveType.SICK) balance.sick = Math.max(0, balance.sick - paidDays);
     else if (leaveType === LeaveType.ANNUAL) balance.annual = Math.max(0, balance.annual - paidDays);
     else if (leaveType === LeaveType.MATERNITY) balance.maternity = Math.max(0, balance.maternity - paidDays);
@@ -461,7 +467,7 @@ export class LeavesService {
     });
     if (!balance) return;
 
-    if (leaveType === LeaveType.CASUAL) balance.casual += paidDays;
+    if (leaveType === LeaveType.CASUAL || leaveType === LeaveType.HALF_DAY) balance.casual += paidDays;
     else if (leaveType === LeaveType.SICK) balance.sick += paidDays;
     else if (leaveType === LeaveType.ANNUAL) balance.annual += paidDays;
     else if (leaveType === LeaveType.MATERNITY) balance.maternity += paidDays;

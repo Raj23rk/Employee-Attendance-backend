@@ -65,8 +65,9 @@ export class DashboardService {
     ]);
 
     let workingHours = '00:00';
+    const isCheckedOut = !!todayAttendance?.checkOutTime && !!todayAttendance?.checkInTime && new Date(todayAttendance.checkOutTime).getTime() > new Date(todayAttendance.checkInTime).getTime();
     if (todayAttendance && todayAttendance.checkInTime) {
-      const endTime = todayAttendance.checkOutTime ? new Date(todayAttendance.checkOutTime) : new Date();
+      const endTime = isCheckedOut ? new Date(todayAttendance.checkOutTime) : new Date();
       const diffMs = endTime.getTime() - new Date(todayAttendance.checkInTime).getTime();
       const totalMinutes = Math.max(0, Math.floor(diffMs / 60000) - (todayAttendance.breakMinutes || 60));
       const hrs = Math.floor(totalMinutes / 60);
@@ -78,10 +79,12 @@ export class DashboardService {
       success: true,
       data: {
         todayCheckIn: {
-          checkedIn: !!todayAttendance?.checkInTime,
+          checkedIn: !!todayAttendance?.checkInTime && !isCheckedOut,
+          isCheckedIn: !!todayAttendance?.checkInTime && !isCheckedOut,
+          isCheckedOut: isCheckedOut,
           checkInTime: todayAttendance?.checkInTime || null,
-          checkOutTime: todayAttendance?.checkOutTime || null,
-          status: todayAttendance?.status || AttendanceStatus.ABSENT,
+          checkOutTime: isCheckedOut ? todayAttendance.checkOutTime : null,
+          status: isCheckedOut ? 'CHECKED_OUT' : (todayAttendance?.status || AttendanceStatus.ABSENT),
           workingHours,
         },
         kpis: {
@@ -188,8 +191,9 @@ export class DashboardService {
       const halfDays = userAtts.filter((a: any) => a.status === AttendanceStatus.HALF_DAY).length;
       const permissionHours = userPerms.reduce((acc: number, p: any) => acc + (p.durationHours || 0), 0);
 
+      const isCheckedOut = !!att && !!att.checkOutTime && !!att.checkInTime && new Date(att.checkOutTime).getTime() > new Date(att.checkInTime).getTime();
       const checkInFormatted = att && att.checkInTime ? this.formatTime(att.checkInTime) : null;
-      const checkOutFormatted = att && att.checkOutTime ? this.formatTime(att.checkOutTime) : null;
+      const checkOutFormatted = isCheckedOut ? this.formatTime(att.checkOutTime) : null;
 
       return {
         id: u.employeeId,
@@ -207,7 +211,7 @@ export class DashboardService {
         // Attendance Data
         checkin: checkInFormatted || '-',
         checkout: checkOutFormatted || '-',
-        todayStatus: att ? att.status : AttendanceStatus.ABSENT,
+        todayStatus: isCheckedOut ? 'CHECKED_OUT' : (att ? att.status : AttendanceStatus.ABSENT),
         isLate: att?.isLate || false,
         lateMinutes: att?.lateMinutes || 0,
         isLatePenaltyApplied: att?.isLatePenaltyApplied || false,

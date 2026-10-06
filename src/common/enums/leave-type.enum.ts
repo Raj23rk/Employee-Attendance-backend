@@ -1,6 +1,7 @@
 export enum LeaveType {
   ANNUAL = 'ANNUAL',
   CASUAL = 'CASUAL',
+  HALF_DAY = 'HALF_DAY',
   SICK = 'SICK',
   MATERNITY = 'MATERNITY',
   PATERNITY = 'PATERNITY',

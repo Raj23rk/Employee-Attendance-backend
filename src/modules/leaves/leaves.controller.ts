@@ -32,8 +32,8 @@ export class LeavesController {
   }
 
   // 2. Apply for Leave
-  @Post('apply')
-  @ApiOperation({ summary: 'Apply for leave (Enforces 1 CL per month, Medical certificate for sick leave otherwise LOP)' })
+  @Post(['apply', ''])
+  @ApiOperation({ summary: 'Apply for leave (Enforces 1 CL per month, Half-day support, Medical cert for sick leave)' })
   async applyLeave(
     @CurrentUser('id') userId: string,
     @Body() dto: ApplyLeaveDto,

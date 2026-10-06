@@ -21,6 +21,12 @@ export class Leave {
   @Prop({ required: true, min: 0.5 })
   days: number;
 
+  @Prop({ default: false })
+  isHalfDay: boolean;
+
+  @Prop({ default: '' })
+  halfDaySession?: string; // 'FIRST_HALF' | 'SECOND_HALF' | 'MORNING' | 'AFTERNOON'
+
   @Prop({ default: 0 })
   paidDays: number;
 

@@ -7,6 +7,7 @@ import {
   IsArray,
   ValidateNested,
   Min,
+  IsBoolean,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AttendanceStatus } from '../../../common/enums/attendance-status.enum';
@@ -192,24 +193,44 @@ export class UpdatePolicyDto {
 export class ApplyPermissionDto {
   @IsNotEmpty()
   @IsString()
-  date: string; // YYYY-MM-DD
+  date: string; // YYYY-MM-DD or DD-MM-YYYY
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  startTime: string; // e.g. "09:40 AM" or "14:00"
+  startTime?: string; // e.g. "09:40 AM" or "14:00"
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  endTime: string; // e.g. "11:40 AM" or "16:00"
+  fromTime?: string;
 
-  @IsNotEmpty()
-  @IsNumber()
-  @Min(0.25)
-  durationHours: number; // e.g. 1.0, 1.5, 2.0
+  @IsOptional()
+  @IsString()
+  endTime?: string; // e.g. "11:40 AM" or "16:00"
+
+  @IsOptional()
+  @IsString()
+  toTime?: string;
+
+  @IsOptional()
+  durationHours?: number | string; // e.g. 1.0, 1.5, 2.0
+
+  @IsOptional()
+  duration?: number | string;
+
+  @IsOptional()
+  durationMinutes?: number;
 
   @IsNotEmpty()
   @IsString()
   reason: string;
+
+  @IsOptional()
+  @IsArray()
+  approvers?: string[];
+
+  @IsOptional()
+  @IsBoolean()
+  sendNotification?: boolean;
 }
 
 export class ReviewPermissionDto {

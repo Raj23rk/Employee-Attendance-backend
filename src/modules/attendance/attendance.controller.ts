@@ -81,7 +81,7 @@ export class AttendanceController {
   }
 
   // 5. Apply Monthly Permission (Max 2 hours/month allowed)
-  @Post('permissions/apply')
+  @Post(['permissions', 'permissions/apply'])
   @ApiOperation({ summary: 'Apply for monthly permission (Max 2 hours per month; excess triggers half-day deduction)' })
   async applyPermission(
     @CurrentUser('id') userId: string,
@@ -91,7 +91,7 @@ export class AttendanceController {
   }
 
   // 6. My Permissions & Quota
-  @Get('permissions/my')
+  @Get(['permissions', 'permissions/my'])
   @ApiOperation({ summary: 'Get my monthly permission applications and remaining hours out of 2 hrs limit' })
   async getMyPermissions(
     @CurrentUser('id') userId: string,
@@ -115,7 +115,7 @@ export class AttendanceController {
   }
 
   // 8. Manager / HR: Review Permission Request
-  @Patch('permissions/:id/review')
+  @Patch(['permissions/:id/review', 'permissions/:id'])
   @Roles(Role.MANAGER, Role.HR, Role.CEO)
   @ApiOperation({ summary: 'Approve or Reject permission request (Applies half-day deduction if over 2 hours limit)' })
   async reviewPermission(

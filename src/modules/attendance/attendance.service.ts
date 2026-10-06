@@ -620,9 +620,20 @@ export class AttendanceService {
       throw new NotFoundException('User not found');
     }
 
-    const permDate = new Date(dto.date);
-    const targetYear = permDate.getFullYear();
-    const targetMonth = permDate.getMonth() + 1;
+    const startTime = dto.startTime || dto.fromTime || '09:40 AM';
+    const endTime = dto.endTime || dto.toTime || '10:40 AM';
+    const durationHours = Number(dto.durationHours ?? dto.duration ?? (dto.durationMinutes ? dto.durationMinutes / 60 : 1)) || 1;
+
+    let dateStr = dto.date;
+    if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+      const parts = dateStr.split('-');
+      // DD-MM-YYYY -> YYYY-MM-DD
+      dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+
+    const permDate = new Date(dateStr);
+    const targetYear = isNaN(permDate.getFullYear()) ? new Date().getFullYear() : permDate.getFullYear();
+    const targetMonth = isNaN(permDate.getMonth()) ? new Date().getMonth() + 1 : permDate.getMonth() + 1;
     const startStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-01`;
     const endStr = `${targetYear}-${String(targetMonth).padStart(2, '0')}-31`;
 
@@ -634,7 +645,7 @@ export class AttendanceService {
     });
 
     const previousHours = existingPerms.reduce((acc, p) => acc + p.durationHours, 0);
-    const totalRequestedHours = previousHours + dto.durationHours;
+    const totalRequestedHours = previousHours + durationHours;
 
     let exceedsMonthlyLimit = false;
     let isSalaryDeductionApplied = false;
@@ -650,11 +661,11 @@ export class AttendanceService {
 
     const permission = await this.permissionModel.create({
       userId: new Types.ObjectId(userId),
-      date: dto.date,
-      startTime: dto.startTime,
-      endTime: dto.endTime,
-      durationHours: dto.durationHours,
-      durationMinutes: Math.round(dto.durationHours * 60),
+      date: dateStr,
+      startTime,
+      endTime,
+      durationHours,
+      durationMinutes: Math.round(durationHours * 60),
       reason: dto.reason,
       status: PermissionStatus.PENDING,
       exceedsMonthlyLimit,
@@ -669,7 +680,7 @@ export class AttendanceService {
         await this.notificationsService.createInAppNotification(
           manager._id.toString(),
           'Permission Request Received',
-          `${user.name} applied for ${dto.durationHours} hr(s) permission on ${dto.date} (${exceedsMonthlyLimit ? 'Exceeds 2hr monthly limit: Half-day deduction' : 'Within 2hr limit'}).`,
+          `${user.name} applied for ${durationHours} hr(s) permission on ${dateStr} (${exceedsMonthlyLimit ? 'Exceeds 2hr monthly limit: Half-day deduction' : 'Within 2hr limit'}).`,
           'INFO',
           '/attendance/permissions',
         );

@@ -103,7 +103,7 @@ export class AttendanceController {
 
   // 7. Manager / HR: View Team Permission Requests
   @Get('permissions/team')
-  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @Roles(Role.MANAGER, Role.TEAM_MANAGER, Role.HR, Role.HR_MANAGER, Role.CEO, Role.ADMIN, Role.SYSTEM_ADMIN, Role.MD, Role.GM, Role.EXECUTIVE)
   @ApiOperation({ summary: 'List team permission requests for review (with branch filter)' })
   async getTeamPermissions(
     @CurrentUser('id') userId: string,
@@ -116,7 +116,7 @@ export class AttendanceController {
 
   // 8. Manager / HR: Review Permission Request
   @Patch(['permissions/:id/review', 'permissions/:id'])
-  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @Roles(Role.MANAGER, Role.TEAM_MANAGER, Role.HR, Role.HR_MANAGER, Role.CEO, Role.ADMIN, Role.SYSTEM_ADMIN, Role.MD, Role.GM, Role.EXECUTIVE)
   @ApiOperation({ summary: 'Approve or Reject permission request (Applies half-day deduction if over 2 hours limit)' })
   async reviewPermission(
     @Param('id') id: string,
@@ -145,7 +145,7 @@ export class AttendanceController {
 
   // 11. Manager: Team Attendance Today
   @Get('manager/team-today')
-  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @Roles(Role.MANAGER, Role.TEAM_MANAGER, Role.HR, Role.HR_MANAGER, Role.CEO, Role.ADMIN, Role.SYSTEM_ADMIN, Role.MD, Role.GM, Role.EXECUTIVE)
   @ApiOperation({ summary: 'Get manager team attendance today (with optional branch filter)' })
   async getTeamToday(
     @CurrentUser('id') userId: string,
@@ -157,7 +157,7 @@ export class AttendanceController {
 
   // 12. Manager: Team Monthly Report
   @Get('manager/team-monthly')
-  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @Roles(Role.MANAGER, Role.TEAM_MANAGER, Role.HR, Role.HR_MANAGER, Role.CEO, Role.ADMIN, Role.SYSTEM_ADMIN, Role.MD, Role.GM, Role.EXECUTIVE)
   @ApiOperation({ summary: 'Get monthly attendance report for manager team' })
   async getTeamMonthly(
     @CurrentUser('id') userId: string,

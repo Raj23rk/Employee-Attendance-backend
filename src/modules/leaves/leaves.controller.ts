@@ -60,7 +60,7 @@ export class LeavesController {
 
   // 5. Manager: Team Leave Requests
   @Get('manager/team-requests')
-  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @Roles(Role.MANAGER, Role.TEAM_MANAGER, Role.HR, Role.HR_MANAGER, Role.CEO, Role.ADMIN, Role.SYSTEM_ADMIN, Role.MD, Role.GM, Role.EXECUTIVE)
   @ApiOperation({ summary: 'List pending leave applications from reportees (with branch filter)' })
   async getTeamRequests(
     @CurrentUser('id') userId: string,
@@ -72,7 +72,7 @@ export class LeavesController {
 
   // 6. Manager / HR: Review Leave
   @Patch('manager/:id/review')
-  @Roles(Role.MANAGER, Role.HR, Role.CEO)
+  @Roles(Role.MANAGER, Role.TEAM_MANAGER, Role.HR, Role.HR_MANAGER, Role.CEO, Role.ADMIN, Role.SYSTEM_ADMIN, Role.MD, Role.GM, Role.EXECUTIVE)
   @ApiOperation({ summary: 'Approve or Reject leave application (with Medical Certificate validation)' })
   async reviewLeave(
     @Param('id') id: string,

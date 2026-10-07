@@ -53,6 +53,47 @@ export class DashboardService {
     });
   }
 
+  private normalizeDateString(input?: string): string {
+    if (!input) {
+      return this.getTodayString();
+    }
+
+    const s = String(input).trim();
+    if (!s || s === 'undefined' || s === 'null' || s === '') {
+      return this.getTodayString();
+    }
+
+    // Already in YYYY-MM-DD format
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      return s;
+    }
+    // DD-MM-YYYY format e.g. 01-10-2026
+    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) {
+      const [d, m, y] = s.split('-');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    // DD/MM/YYYY format e.g. 01/10/2026
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+      const [d, m, y] = s.split('/');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    // YYYY/MM/DD
+    if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(s)) {
+      const [y, m, d] = s.split('/');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    return s;
+  }
+
   // 1. OVERVIEW
   async getOverview(userId: string, role: Role) {
     const todayStr = this.getTodayString();
@@ -113,7 +154,7 @@ export class DashboardService {
     page?: number;
     limit?: number;
   }) {
-    const dateStr = query.date || this.getTodayString();
+    const dateStr = this.normalizeDateString(query.date);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.max(1, Number(query.limit) || 20);
     const skip = (page - 1) * limit;
@@ -139,10 +180,12 @@ export class DashboardService {
       ];
     }
 
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth() + 1;
+    const [yStr, mStr] = dateStr.split('-');
+    const currentYear = Number(yStr) || new Date().getFullYear();
+    const currentMonth = Number(mStr) || (new Date().getMonth() + 1);
+    const lastDayOfMonth = new Date(currentYear, currentMonth, 0).getDate();
     const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
 
     const [users, total, branches] = await Promise.all([
       this.userModel
@@ -257,12 +300,14 @@ export class DashboardService {
   }
 
   // 3. FULL EMPLOYEE DETAILS POPUP API
-  async getEmployeeFullDetailsPopup(userId: string) {
-    const todayStr = this.getTodayString();
-    const currentYear = new Date().getFullYear();
-    const currentMonth = new Date().getMonth() + 1;
+  async getEmployeeFullDetailsPopup(userId: string, targetDate?: string) {
+    const todayStr = this.normalizeDateString(targetDate);
+    const [yStr, mStr] = todayStr.split('-');
+    const currentYear = Number(yStr) || new Date().getFullYear();
+    const currentMonth = Number(mStr) || (new Date().getMonth() + 1);
+    const lastDayOfMonth = new Date(currentYear, currentMonth, 0).getDate();
     const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+    const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
 
     const [user, todayAtt, balance, recentLeaves, recentPermissions, monthlyAttendances] = await Promise.all([
       this.userModel

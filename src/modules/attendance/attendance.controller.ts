@@ -279,4 +279,17 @@ export class AttendanceController {
   async getCeoDepartmentStats(@Query('branch') branch?: string) {
     return this.attendanceService.getCeoDepartmentStats(branch);
   }
+
+  // 22. Daily Multi-Branch Irregularities Report (Late Comers, Half-Day, Approved Leave, Full-Day Absentees)
+  @Get('reports/daily-branch-irregularities')
+  @Roles(Role.HR, Role.HR_MANAGER, Role.GM, Role.MD, Role.CEO, Role.ADMIN, Role.MANAGER, Role.EXECUTIVE)
+  @ApiOperation({
+    summary: 'Daywise branch report: Late comers, half-day leaves, full-day leaves, and absentees',
+  })
+  async getDailyBranchIrregularitiesReport(
+    @Query('date') date?: string,
+    @Query('branch') branch?: string,
+  ) {
+    return this.attendanceService.getDailyBranchIrregularitiesReport(date, branch);
+  }
 }

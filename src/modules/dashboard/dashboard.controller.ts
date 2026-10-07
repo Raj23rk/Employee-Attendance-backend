@@ -63,8 +63,8 @@ export class DashboardController {
   @Get('hr-ceo/employees/:id/popup')
   @Roles(Role.HR, Role.CEO, Role.ADMIN)
   @ApiOperation({ summary: 'Action button popup: Complete employee details, bank account info, user details, check-in status, active state' })
-  async getEmployeePopupDetails(@Param('id') id: string) {
-    return this.dashboardService.getEmployeeFullDetailsPopup(id);
+  async getEmployeePopupDetails(@Param('id') id: string, @Query('date') date?: string) {
+    return this.dashboardService.getEmployeeFullDetailsPopup(id, date);
   }
 
   // HR & CEO: Download Individual Employee Report (CSV / Statement)

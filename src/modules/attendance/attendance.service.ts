@@ -21,6 +21,8 @@ import {
 } from './schemas/permission.schema';
 import { Branch, BranchDocument } from '../organization/schemas/branch.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
+import { Leave, LeaveDocument } from '../leaves/schemas/leave.schema';
+import { LeaveStatus } from '../../common/enums/leave-type.enum';
 import {
   CheckInDto,
   CheckOutDto,
@@ -69,6 +71,8 @@ export class AttendanceService {
     private branchModel: Model<BranchDocument>,
     @InjectModel(User.name)
     private userModel: Model<UserDocument>,
+    @InjectModel(Leave.name)
+    private leaveModel: Model<LeaveDocument>,
     private notificationsService: NotificationsService,
   ) {}
 
@@ -79,6 +83,47 @@ export class AttendanceService {
       month: '2-digit',
       day: '2-digit',
     }).format(new Date());
+  }
+
+  public normalizeDateString(input?: string): string {
+    if (!input) {
+      return this.getTodayString();
+    }
+
+    const s = String(input).trim();
+    if (!s || s === 'undefined' || s === 'null' || s === '') {
+      return this.getTodayString();
+    }
+
+    // Already in YYYY-MM-DD format
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      return s;
+    }
+    // DD-MM-YYYY format e.g. 01-10-2026
+    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) {
+      const [d, m, y] = s.split('-');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    // DD/MM/YYYY format e.g. 01/10/2026
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) {
+      const [d, m, y] = s.split('/');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    // YYYY/MM/DD
+    if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(s)) {
+      const [y, m, d] = s.split('/');
+      return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    return s;
   }
 
   private formatTime(date: Date | null | undefined): string | null {
@@ -1069,7 +1114,7 @@ export class AttendanceService {
     limit?: number;
     search?: string;
   }) {
-    const dateStr = query.date || this.getTodayString();
+    const dateStr = this.normalizeDateString(query.date);
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.max(1, Number(query.limit) || 20);
     const skip = (page - 1) * limit;
@@ -1392,5 +1437,220 @@ export class AttendanceService {
     );
 
     return { success: true, data: results };
+  }
+
+  /**
+   * Daywise All Branch Attendance Report (Late Comers, Half Day, Approved Leaves, Full Day Absentees)
+   */
+  async getDailyBranchIrregularitiesReport(date?: string, branchFilter?: string) {
+    const queryDate = this.normalizeDateString(date);
+
+    const policy = (await this.policyModel.findOne({ isActive: true })) || {
+      checkInTime: '09:40',
+      graceTime: '09:45',
+      halfDayAfterTime: '13:00',
+    };
+
+    const userQuery: any = { isActive: true };
+    if (branchFilter && branchFilter !== 'ALL') {
+      userQuery.branch = branchFilter;
+    }
+    const users = await this.userModel.find(userQuery).sort({ branch: 1, name: 1 }).exec();
+
+    // Fetch all attendance for this date
+    const attendances = await this.attendanceModel.find({ date: queryDate }).exec();
+    const attendanceMap = new Map<string, AttendanceDocument>(
+      attendances.map((a) => [a.userId.toString(), a]),
+    );
+
+    // Fetch approved leaves covering this date
+    const leaves = await this.leaveModel
+      .find({
+        status: LeaveStatus.APPROVED,
+        fromDate: { $lte: queryDate },
+        toDate: { $gte: queryDate },
+      })
+      .exec();
+    const leaveMap = new Map<string, any>(leaves.map((l) => [l.userId.toString(), l]));
+
+    const branchMap = new Map<string, any>();
+
+    const allLateComers: any[] = [];
+    const allHalfDay: any[] = [];
+    const allLeaves: any[] = [];
+    const allAbsentees: any[] = [];
+    const allOnTime: any[] = [];
+
+    for (const u of users) {
+      const branchName = u.branch || 'Unassigned Branch';
+      if (!branchMap.has(branchName)) {
+        let shortName = branchName;
+        if (branchName.includes('3.0')) shortName = 'Sivakasi 3.0';
+        else if (branchName.includes('1.0')) shortName = 'Sivakasi 1.0';
+        else if (branchName.includes('Srivilliputhur') || branchName.includes('2.0')) shortName = 'Srivilliputhur 2.0';
+
+        branchMap.set(branchName, {
+          branchName,
+          shortName,
+          totalStaff: 0,
+          presentCount: 0,
+          onTimeCount: 0,
+          lateCount: 0,
+          halfDayCount: 0,
+          leaveCount: 0,
+          absentCount: 0,
+          lateComers: [],
+          halfDayList: [],
+          leaveList: [],
+          absentList: [],
+          onTimeList: [],
+        });
+      }
+
+      const b = branchMap.get(branchName);
+      b.totalStaff++;
+
+      const userIdStr = u._id.toString();
+      const att = attendanceMap.get(userIdStr);
+      const lv = leaveMap.get(userIdStr);
+
+      const staffInfo = {
+        userId: u._id,
+        employeeId: u.employeeId,
+        name: u.name,
+        role: u.role,
+        designation: u.designation || u.role,
+        branch: u.branch,
+        shortBranch: b.shortName,
+        phone: u.phone,
+        department: u.department,
+        avatarUrl: u.avatarUrl,
+      };
+
+      // Check if employee has joined before or on queryDate
+      if (u.dateOfJoining) {
+        const dojStr = new Date(u.dateOfJoining).toISOString().split('T')[0];
+        if (dojStr > queryDate) {
+          continue; // not joined yet
+        }
+      }
+
+      // 1. Check Leave
+      if (lv) {
+        b.leaveCount++;
+        const leaveItem = {
+          ...staffInfo,
+          leaveType: lv.leaveType,
+          isHalfDay: lv.isHalfDay || false,
+          halfDaySession: lv.halfDaySession || '',
+          isLop: lv.isLop || false,
+          reason: lv.reason,
+          fromDate: lv.fromDate,
+          toDate: lv.toDate,
+          status: 'ON_LEAVE',
+        };
+        b.leaveList.push(leaveItem);
+        allLeaves.push(leaveItem);
+
+        if (lv.isHalfDay) {
+          b.halfDayCount++;
+          b.halfDayList.push(leaveItem);
+          allHalfDay.push(leaveItem);
+        }
+        continue;
+      }
+
+      // 2. Check Attendance
+      if (att) {
+        const checkInTimeFormatted = att.checkInTime ? this.formatTime(att.checkInTime) : null;
+        const checkOutTimeFormatted = att.checkOutTime ? this.formatTime(att.checkOutTime) : null;
+
+        if (att.status === AttendanceStatus.HALF_DAY) {
+          b.halfDayCount++;
+          b.presentCount++;
+          const halfDayItem = {
+            ...staffInfo,
+            checkInTime: checkInTimeFormatted,
+            checkOutTime: checkOutTimeFormatted,
+            totalWorkingMinutes: att.totalWorkingMinutes || 0,
+            status: 'HALF_DAY',
+            isLate: att.isLate || false,
+            lateMinutes: att.lateMinutes || 0,
+            notes: att.notes || 'Half-day recorded',
+          };
+          b.halfDayList.push(halfDayItem);
+          allHalfDay.push(halfDayItem);
+        } else if (att.status === AttendanceStatus.ABSENT) {
+          b.absentCount++;
+          const absentItem = {
+            ...staffInfo,
+            status: 'ABSENT',
+            reason: att.notes || 'Marked Absent in system',
+          };
+          b.absentList.push(absentItem);
+          allAbsentees.push(absentItem);
+        } else {
+          // PRESENT / WFH
+          b.presentCount++;
+
+          if (att.isLate) {
+            b.lateCount++;
+            const lateItem = {
+              ...staffInfo,
+              checkInTime: checkInTimeFormatted,
+              lateMinutes: att.lateMinutes || 0,
+              lateCountThisMonth: att.lateCountThisMonth || 1,
+              isLatePenaltyApplied: att.isLatePenaltyApplied || false,
+              latePenaltyType: att.latePenaltyType || 'NONE',
+              status: 'LATE',
+              shiftTime: (policy as any).workStartTime || '09:40 AM',
+              graceTime: policy.graceTime || '09:45 AM',
+            };
+            b.lateComers.push(lateItem);
+            allLateComers.push(lateItem);
+          } else {
+            b.onTimeCount++;
+            const onTimeItem = {
+              ...staffInfo,
+              checkInTime: checkInTimeFormatted,
+              checkOutTime: checkOutTimeFormatted,
+              status: 'ON_TIME',
+            };
+            b.onTimeList.push(onTimeItem);
+            allOnTime.push(onTimeItem);
+          }
+        }
+      } else {
+        // No punch and no leave -> Full Day Absent
+        b.absentCount++;
+        const absentItem = {
+          ...staffInfo,
+          status: 'ABSENT',
+          reason: 'No check-in / punch recorded',
+        };
+        b.absentList.push(absentItem);
+        allAbsentees.push(absentItem);
+      }
+    }
+
+    const branches = Array.from(branchMap.values());
+
+    return {
+      success: true,
+      date: queryDate,
+      summary: {
+        totalEmployees: users.length,
+        presentOnTimeCount: allOnTime.length,
+        lateComersCount: allLateComers.length,
+        halfDayCount: allHalfDay.length,
+        onLeaveCount: allLeaves.length,
+        fullDayAbsentCount: allAbsentees.length,
+      },
+      branches,
+      allLateComers,
+      allHalfDay,
+      allLeaves,
+      allAbsentees,
+    };
   }
 }

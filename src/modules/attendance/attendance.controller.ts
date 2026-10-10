@@ -292,4 +292,136 @@ export class AttendanceController {
   ) {
     return this.attendanceService.getDailyBranchIrregularitiesReport(date, branch);
   }
+
+  // 23. Individual Monthly Attendance & Biometric Audit Log (JSON or HTML)
+  @Get(['reports/individual/:id', 'reports/employee/:id'])
+  @ApiOperation({
+    summary:
+      'Get individual monthly attendance report & biometric audit log for specific employee (JSON or HTML)',
+  })
+  async getIndividualReport(
+    @Param('id') id: string,
+    @Query('month') month?: number,
+    @Query('year') year?: number,
+    @Query('format') format?: string,
+    @Res() res?: Response,
+  ) {
+    const data = await this.attendanceService.getIndividualMonthlyReport(id, month, year);
+    if (format === 'html' && res) {
+      const html = this.attendanceService.generateIndividualReportHtml(data);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    }
+    if (res) {
+      return res.json(data);
+    }
+    return data;
+  }
+
+  // 24. Individual Monthly Attendance Report for Current User or Query
+  @Get('reports/individual')
+  @ApiOperation({
+    summary:
+      'Get individual monthly attendance report for current user or query userId/employeeId',
+  })
+  async getMyIndividualReport(
+    @CurrentUser('id') currentUserId: string,
+    @Query('userId') queryUserId?: string,
+    @Query('employeeId') queryEmployeeId?: string,
+    @Query('month') month?: number,
+    @Query('year') year?: number,
+    @Query('format') format?: string,
+    @Res() res?: Response,
+  ) {
+    const targetIdentifier = queryUserId || queryEmployeeId || currentUserId;
+    const data = await this.attendanceService.getIndividualMonthlyReport(
+      targetIdentifier,
+      month,
+      year,
+    );
+    if (format === 'html' && res) {
+      const html = this.attendanceService.generateIndividualReportHtml(data);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    }
+    if (res) {
+      return res.json(data);
+    }
+    return data;
+  }
+
+  // 25. Individual Monthly Attendance Report HTML Direct View / Print
+  @Get(['reports/individual-html/:id', 'reports/employee/:id/html'])
+  @ApiOperation({
+    summary:
+      'Render printable/PDF-ready HTML monthly attendance statement for an employee',
+  })
+  async getIndividualReportHtml(
+    @Param('id') id: string,
+    @Query('month') month: number,
+    @Query('year') year: number,
+    @Res() res: Response,
+  ) {
+    const data = await this.attendanceService.getIndividualMonthlyReport(id, month, year);
+    const html = this.attendanceService.generateIndividualReportHtml(data);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  }
+
+  // 26. Bulk Monthly Attendance Report (JSON or HTML)
+  @Get('reports/bulk')
+  @Roles(Role.HR, Role.HR_MANAGER, Role.GM, Role.MD, Role.CEO, Role.ADMIN, Role.MANAGER, Role.EXECUTIVE)
+  @ApiOperation({
+    summary:
+      'Get bulk monthly attendance reports for all employees or filtered by branch/department',
+  })
+  async getBulkReport(
+    @Query('month') month?: number,
+    @Query('year') year?: number,
+    @Query('branch') branch?: string,
+    @Query('department') department?: string,
+    @Query('format') format?: string,
+    @Res() res?: Response,
+  ) {
+    const data = await this.attendanceService.getBulkMonthlyReport(
+      month,
+      year,
+      branch,
+      department,
+    );
+    if (format === 'html' && res) {
+      const html = this.attendanceService.generateBulkReportHtml(data);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(html);
+    }
+    if (res) {
+      return res.json(data);
+    }
+    return data;
+  }
+
+  // 27. Bulk Monthly Attendance Report HTML Direct View / Print
+  @Get('reports/bulk-html')
+  @Roles(Role.HR, Role.HR_MANAGER, Role.GM, Role.MD, Role.CEO, Role.ADMIN, Role.MANAGER, Role.EXECUTIVE)
+  @ApiOperation({
+    summary:
+      'Render bulk printable/PDF-ready HTML monthly attendance statements for all employees',
+  })
+  async getBulkReportHtml(
+    @Query('month') month: number,
+    @Query('year') year: number,
+    @Query('branch') branch: string,
+    @Query('department') department: string,
+    @Res() res: Response,
+  ) {
+    const data = await this.attendanceService.getBulkMonthlyReport(
+      month,
+      year,
+      branch,
+      department,
+    );
+    const html = this.attendanceService.generateBulkReportHtml(data);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  }
 }

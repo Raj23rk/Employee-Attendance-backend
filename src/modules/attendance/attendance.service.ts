@@ -22,7 +22,9 @@ import {
 import { Branch, BranchDocument } from '../organization/schemas/branch.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { Leave, LeaveDocument } from '../leaves/schemas/leave.schema';
-import { LeaveStatus } from '../../common/enums/leave-type.enum';
+import { LeaveBalance, LeaveBalanceDocument } from '../leaves/schemas/leave-balance.schema';
+import { Optional } from '@nestjs/common';
+import { LeaveStatus, LeaveType } from '../../common/enums/leave-type.enum';
 import {
   CheckInDto,
   CheckOutDto,
@@ -73,6 +75,9 @@ export class AttendanceService {
     private userModel: Model<UserDocument>,
     @InjectModel(Leave.name)
     private leaveModel: Model<LeaveDocument>,
+    @Optional()
+    @InjectModel(LeaveBalance.name)
+    private leaveBalanceModel: Model<LeaveBalanceDocument>,
     private notificationsService: NotificationsService,
   ) {}
 
@@ -1653,4 +1658,1190 @@ export class AttendanceService {
       allAbsentees,
     };
   }
+
+  // 23. INDIVIDUAL MONTHLY ATTENDANCE REPORT & BIOMETRIC AUDIT LOG
+  async getIndividualMonthlyReport(identifier: string, month?: number, year?: number) {
+    let user: any = null;
+    if (Types.ObjectId.isValid(identifier)) {
+      user = await this.userModel.findById(identifier).lean();
+    }
+    if (!user) {
+      user = await this.userModel.findOne({ employeeId: identifier }).lean();
+    }
+    if (!user) {
+      user = await this.userModel.findOne({
+        $or: [
+          { employeeId: new RegExp(`^${identifier}$`, 'i') },
+          { name: new RegExp(`^${identifier}$`, 'i') },
+          { email: new RegExp(`^${identifier}$`, 'i') },
+        ],
+      }).lean();
+    }
+    if (!user) {
+      throw new NotFoundException(`Employee '${identifier}' not found`);
+    }
+
+    const now = new Date();
+    const y = Number(year) || now.getFullYear();
+    const m = Number(month) || (now.getMonth() + 1);
+
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    const monthShortNames = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    const startStr = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    const endStr = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const todayStr = this.getTodayString();
+
+    const statementPeriod = `${monthNames[m - 1]} ${y}`;
+    const printDate = new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'Asia/Kolkata',
+    }).format(new Date());
+
+    const [policyDoc, attendances, permissions, leaves, leaveBalance] = await Promise.all([
+      this.policyModel.findOne({ isActive: true }).lean(),
+      this.attendanceModel
+        .find({
+          userId: user._id,
+          date: { $gte: startStr, $lte: endStr },
+        })
+        .sort({ date: 1 })
+        .lean(),
+      this.permissionModel
+        .find({
+          userId: user._id,
+          date: { $gte: startStr, $lte: endStr },
+          status: { $ne: 'REJECTED' },
+        })
+        .lean(),
+      this.leaveModel
+        .find({
+          userId: user._id,
+          status: { $in: [LeaveStatus.APPROVED, 'APPROVED'] },
+          $or: [{ fromDate: { $lte: endStr }, toDate: { $gte: startStr } }],
+        })
+        .lean(),
+      this.leaveBalanceModel
+        ? this.leaveBalanceModel.findOne({ userId: user._id, year: y }).lean()
+        : null,
+    ]);
+
+    const shiftStartTime = policyDoc?.workStartTime || '09:40 AM';
+    const graceTime = policyDoc?.graceTime || '09:45 AM';
+    const shiftEndTime = policyDoc?.workEndTime || '07:00 PM';
+    const allowedLate = policyDoc?.allowedLateCheckins || 3;
+    const maxPermissionHours = policyDoc?.maxMonthlyPermissionHours || 2;
+
+    const doj = user.dateOfJoining
+      ? new Date(user.dateOfJoining).toISOString().split('T')[0]
+      : 'N/A';
+
+    // Summary calculations
+    const presentRecords = attendances.filter(
+      (a: any) =>
+        a.status === AttendanceStatus.PRESENT ||
+        a.status === AttendanceStatus.HALF_DAY ||
+        a.status === AttendanceStatus.WFH ||
+        (a.checkInTime && a.status !== AttendanceStatus.ABSENT),
+    );
+    const daysPresent = presentRecords.length;
+
+    const lateRecords = attendances.filter((a: any) => a.isLate);
+    const lateArrivalsCount = lateRecords.length;
+    const lateArrivalsText = `${lateArrivalsCount} / ${allowedLate}`;
+
+    const casualLeavesUsed = leaves
+      .filter((l: any) => l.leaveType === LeaveType.CASUAL || (l.leaveType as any) === 'CASUAL')
+      .reduce((acc: number, l: any) => acc + (l.paidDays || l.days || 1), 0);
+    const casualBalance = leaveBalance?.casual ?? 12;
+    const casualLeavesText = `${casualBalance} / ${casualLeavesUsed > 0 ? casualLeavesUsed : 1} CL`;
+
+    const totalPermissionHours = permissions.reduce(
+      (acc: number, p: any) => acc + (p.durationHours || 0),
+      0,
+    );
+    const permissionUsedText = `${totalPermissionHours}h / ${maxPermissionHours}h`;
+
+    const lopLeaves = leaves
+      .filter((l: any) => l.leaveType === LeaveType.LOSS_OF_PAY || (l.leaveType as any) === 'LOP' || l.isLop)
+      .reduce((acc: number, l: any) => acc + (l.days || 1), 0);
+    const latePenaltyDeductions = attendances.filter((a: any) => a.isLatePenaltyApplied).length * 0.5;
+    const totalLopDays = lopLeaves + latePenaltyDeductions;
+    const lopText = `${totalLopDays} Day(s)`;
+
+    // Daily audit generation
+    const attMap = new Map<string, any>(attendances.map((a: any) => [a.date, a]));
+    const daysList: any[] = [];
+
+    for (let d = 1; d <= lastDay; d++) {
+      const dayFormatted = String(d).padStart(2, '0');
+      const dateStr = `${y}-${String(m).padStart(2, '0')}-${dayFormatted}`;
+      const dateObj = new Date(y, m - 1, d);
+      const dayOfWeek = dateObj.getDay();
+      const weekdayShort = weekdayNames[dayOfWeek];
+      const dateAndWeekday = `${dayFormatted} ${monthShortNames[m - 1]} ${y}  ${weekdayShort}`;
+      const shiftTimings = `${shiftStartTime} – ${shiftEndTime}`;
+
+      const isSunday = dayOfWeek === 0;
+      const isPast = dateStr < todayStr;
+      const isToday = dateStr === todayStr;
+      const isFuture = dateStr > todayStr;
+
+      const attRecord = attMap.get(dateStr);
+      const leaveRecord = leaves.find((l: any) => dateStr >= l.fromDate && dateStr <= l.toDate);
+
+      let checkIn = '--:--';
+      let checkOut = '--:--';
+      let duration = '--';
+      let statusPolicy = 'SCHEDULED SHIFT';
+      let badgeClass = 'badge-scheduled';
+      let locationTerminal = `Shift: ${shiftTimings}`;
+
+      if (attRecord && attRecord.checkInTime) {
+        checkIn = this.formatTime(attRecord.checkInTime);
+        checkOut = attRecord.checkOutTime ? this.formatTime(attRecord.checkOutTime) : '--:--';
+        duration =
+          attRecord.totalWorkingMinutes > 0
+            ? `${Math.floor(attRecord.totalWorkingMinutes / 60)}h ${attRecord.totalWorkingMinutes % 60}m`
+            : attRecord.checkOutTime
+              ? '0h'
+              : '--';
+
+        if (attRecord.isLatePenaltyApplied) {
+          statusPolicy = 'HALF-DAY DEDUCTION';
+          badgeClass = 'badge-absent';
+        } else if (attRecord.isLate) {
+          statusPolicy = `LATE ARRIVAL (${attRecord.lateMinutes || 0}m)`;
+          badgeClass = 'badge-late';
+        } else if (attRecord.status === AttendanceStatus.HALF_DAY) {
+          statusPolicy = 'HALF DAY';
+          badgeClass = 'badge-halfday';
+        } else if (attRecord.status === AttendanceStatus.WFH) {
+          statusPolicy = 'WORK FROM HOME';
+          badgeClass = 'badge-present';
+        } else {
+          statusPolicy = 'PRESENT';
+          badgeClass = 'badge-present';
+        }
+
+        locationTerminal =
+          attRecord.locationAddress ||
+          attRecord.branchName ||
+          (user.branch ? `${user.branch} Terminal` : "Today's Live Punch (Biometric/GPS)");
+      } else if (leaveRecord) {
+        const isLopLeave =
+          leaveRecord.leaveType === LeaveType.LOSS_OF_PAY ||
+          (leaveRecord.leaveType as any) === 'LOP' ||
+          leaveRecord.isLop;
+        statusPolicy =
+          leaveRecord.leaveType === LeaveType.CASUAL
+            ? 'CASUAL LEAVE (CL)'
+            : isLopLeave
+              ? 'LOSS OF PAY (LOP)'
+              : 'APPROVED LEAVE';
+        badgeClass = isLopLeave ? 'badge-absent' : 'badge-leave';
+        locationTerminal = `Approved Leave (${leaveRecord.reason || leaveRecord.leaveType})`;
+      } else if (isSunday) {
+        statusPolicy = 'SUNDAY (WEEKLY OFF)';
+        badgeClass = 'badge-sunday';
+        locationTerminal = 'Campus Weekly Holiday';
+      } else if (isToday) {
+        statusPolicy = 'SHIFT OUT';
+        badgeClass = 'badge-shift_out';
+        locationTerminal = "Today's Live Punch (Biometric/GPS)";
+      } else if (isFuture) {
+        statusPolicy = 'SCHEDULED SHIFT';
+        badgeClass = 'badge-scheduled';
+        locationTerminal = `Shift: ${shiftTimings}`;
+      } else if (isPast) {
+        statusPolicy = 'ABSENT / LOP';
+        badgeClass = 'badge-absent';
+        locationTerminal = 'No punch logged';
+      }
+
+      daysList.push({
+        day: dayFormatted,
+        date: dateStr,
+        weekday: weekdayShort,
+        dateAndWeekday,
+        shiftTimings,
+        checkIn,
+        checkOut,
+        duration,
+        status: statusPolicy,
+        badgeClass,
+        locationTerminal,
+        isSunday,
+        isPast,
+        isToday,
+        isFuture,
+      });
+    }
+
+    const employeeData = {
+      id: user._id,
+      employeeId: user.employeeId || 'N/A',
+      name: user.name || 'Unknown',
+      designation: user.designation || user.role || 'Staff',
+      role: user.role || 'Staff',
+      department: user.department || 'General',
+      branch: (user as any).branch || '📍 WeGrow Skill Campus – Sivakasi Branch 1.0',
+      dateOfJoining: doj,
+      email: user.email,
+      phone: user.phone,
+    };
+
+    const periodData = {
+      month: m,
+      year: y,
+      monthName: monthNames[m - 1],
+      statementPeriod,
+      printDate,
+      totalDays: lastDay,
+    };
+
+    const metricsData = {
+      daysInMonth: lastDay,
+      daysPresent,
+      lateArrivalsCount,
+      allowedLateCheckins: allowedLate,
+      lateArrivalsText,
+      casualLeavesBalance: casualBalance,
+      casualLeavesUsed,
+      casualLeavesText,
+      permissionHoursUsed: totalPermissionHours,
+      maxPermissionHours,
+      permissionUsedText,
+      lossOfPayDays: totalLopDays,
+      lopText,
+    };
+
+    const shiftPolicyData = {
+      workStartTime: shiftStartTime,
+      graceTime,
+      workEndTime: shiftEndTime,
+      allowedLateCheckins: allowedLate,
+      maxMonthlyPermissionHours: maxPermissionHours,
+    };
+
+    return {
+      success: true,
+      employee: employeeData,
+      period: periodData,
+      metrics: metricsData,
+      shiftPolicy: shiftPolicyData,
+      days: daysList,
+    };
+  }
+
+  // 24. GENERATE INDIVIDUAL HTML REPORT (Print & PDF Ready)
+  generateIndividualReportHtml(reportData: any): string {
+    const { employee, period, metrics, shiftPolicy, days } = reportData;
+
+    const rowsHtml = days
+      .map(
+        (d: any) => `
+        <tr class="${d.isSunday ? 'row-sunday' : ''}">
+          <td class="col-day">${d.day}</td>
+          <td class="col-date">${d.dateAndWeekday}</td>
+          <td class="col-shift">${d.shiftTimings}</td>
+          <td class="col-time">${d.checkIn}</td>
+          <td class="col-time">${d.checkOut}</td>
+          <td class="col-duration">${d.duration}</td>
+          <td class="col-status"><span class="badge ${d.badgeClass}">${d.status}</span></td>
+          <td class="col-location">${d.locationTerminal}</td>
+        </tr>`,
+      )
+      .join('\n');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monthly_Attendance_Report_${employee.employeeId}_${employee.name.replace(/\\s+/g, '_')}_${period.monthName}_${period.year}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary-navy: #0b1f3a;
+      --navy-light: #1e293b;
+      --primary-orange: #ea580c;
+      --orange-light: #ffedd5;
+      --text-dark: #0f172a;
+      --text-muted: #64748b;
+      --border-color: #e2e8f0;
+      --bg-slate: #f8fafc;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--text-dark);
+      background-color: #f1f5f9;
+      font-size: 11px;
+      line-height: 1.4;
+      padding: 20px;
+    }
+
+    .report-card {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 24px 28px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      border-radius: 6px;
+    }
+
+    .no-print-toolbar {
+      max-width: 1200px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #ffffff;
+      padding: 12px 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: #ea580c;
+      color: #ffffff;
+    }
+
+    .btn-primary:hover {
+      background: #c2410c;
+    }
+
+    .btn-secondary {
+      background: #f1f5f9;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+    }
+
+    /* HEADER */
+    .header-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 12px;
+    }
+
+    .org-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--primary-navy);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+
+    .report-subtitle {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--primary-orange);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .header-meta {
+      text-align: right;
+      font-size: 11px;
+      color: #475569;
+      line-height: 1.5;
+    }
+
+    .header-meta strong {
+      color: var(--text-dark);
+      font-weight: 600;
+    }
+
+    .header-rule {
+      height: 3px;
+      background: linear-gradient(90deg, #ea580c 0%, #f97316 100%);
+      margin-bottom: 14px;
+      border-radius: 2px;
+    }
+
+    /* EMPLOYEE DETAILS BAR */
+    .employee-bar {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      background: var(--bg-slate);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 10px 14px;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .emp-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .emp-label {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      letter-spacing: 0.3px;
+    }
+
+    .emp-val {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--primary-navy);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .emp-val.highlight {
+      color: var(--primary-orange);
+    }
+
+    /* KPI METRICS */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .kpi-card {
+      background: #ffffff;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 10px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .kpi-title {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      letter-spacing: 0.3px;
+      margin-bottom: 4px;
+    }
+
+    .kpi-number {
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .kpi-days { color: var(--text-dark); }
+    .kpi-present { color: #059669; }
+    .kpi-late { color: #ea580c; }
+    .kpi-casual { color: #2563eb; }
+    .kpi-permission { color: #7c3aed; }
+    .kpi-lop { color: #dc2626; }
+
+    /* AUDIT LOG TABLE */
+    .audit-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+    }
+
+    .audit-table th {
+      background: var(--primary-navy);
+      color: #ffffff;
+      font-size: 9.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      padding: 7px 6px;
+      text-align: left;
+      border: 1px solid #0f2a4f;
+    }
+
+    .audit-table th.center { text-align: center; }
+
+    .audit-table td {
+      padding: 5.5px 6px;
+      font-size: 10.5px;
+      border: 1px solid #e2e8f0;
+      color: var(--text-dark);
+      vertical-align: middle;
+    }
+
+    .audit-table tbody tr:nth-child(even) {
+      background-color: #fafbfd;
+    }
+
+    .audit-table tbody tr.row-sunday {
+      background-color: #f8fafc;
+    }
+
+    .col-day {
+      text-align: center;
+      font-weight: 700;
+      width: 32px;
+      color: #334155;
+    }
+
+    .col-date {
+      width: 125px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    .col-shift {
+      width: 145px;
+      font-size: 10px;
+      color: #64748b;
+    }
+
+    .col-time {
+      text-align: center;
+      width: 85px;
+      font-weight: 500;
+      color: #334155;
+    }
+
+    .col-duration {
+      text-align: center;
+      width: 65px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .col-status {
+      text-align: center;
+      width: 140px;
+    }
+
+    .col-location {
+      font-size: 10px;
+      color: #475569;
+    }
+
+    /* BADGES */
+    .badge {
+      display: inline-block;
+      padding: 2.5px 7px;
+      border-radius: 4px;
+      font-size: 9.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+    }
+
+    .badge-absent {
+      background: #fee2e2;
+      color: #b91c1c;
+      border: 1px solid #fca5a5;
+    }
+
+    .badge-sunday {
+      background: #e0f2fe;
+      color: #0369a1;
+      border: 1px solid #bae6fd;
+    }
+
+    .badge-shift_out {
+      background: #ffedd5;
+      color: #c2410c;
+      border: 1px solid #fed7aa;
+    }
+
+    .badge-scheduled {
+      background: #f3f4f6;
+      color: #4b5563;
+      border: 1px solid #e5e7eb;
+    }
+
+    .badge-present {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+    }
+
+    .badge-late {
+      background: #fef3c7;
+      color: #b45309;
+      border: 1px solid #fde68a;
+    }
+
+    .badge-leave {
+      background: #dbeafe;
+      color: #1d4ed8;
+      border: 1px solid #bfdbfe;
+    }
+
+    .badge-halfday {
+      background: #fef08a;
+      color: #854d0e;
+      border: 1px solid #fde047;
+    }
+
+    /* FOOTER */
+    .report-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-color);
+      font-size: 9.5px;
+      color: #64748b;
+    }
+
+    .footer-left {
+      line-height: 1.5;
+    }
+
+    .footer-left strong {
+      color: var(--text-dark);
+      font-weight: 700;
+    }
+
+    .footer-right {
+      text-align: right;
+      font-weight: 700;
+      color: var(--primary-navy);
+      padding-top: 25px;
+      border-top: 1px solid #94a3b8;
+      min-width: 200px;
+    }
+
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 8mm 6mm;
+      }
+
+      body {
+        background: #ffffff !important;
+        padding: 0 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      .no-print, .no-print-toolbar {
+        display: none !important;
+      }
+
+      .report-card {
+        padding: 0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+      }
+
+      .audit-table th {
+        background: #0b1f3a !important;
+        color: #ffffff !important;
+      }
+
+      tr {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print-toolbar no-print">
+    <div>
+      <span style="font-weight: 700; color: #0f172a; font-size: 13px;">${employee.employeeId} - ${employee.name}</span>
+      <span style="color: #64748b; font-size: 12px; margin-left: 10px;">${period.statementPeriod} Statement</span>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button onclick="window.print()" class="btn btn-primary">🖨️ Print / Save as PDF</button>
+      <button onclick="window.close()" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+
+  <div class="report-card">
+    <!-- Header -->
+    <table class="header-table">
+      <tr>
+        <td style="vertical-align: top;">
+          <div class="org-title">WEGROW SKILL CAMPUS</div>
+          <div class="report-subtitle">INDIVIDUAL MONTHLY ATTENDANCE &amp; BIOMETRIC AUDIT LOG</div>
+        </td>
+        <td class="header-meta" style="vertical-align: top;">
+          <div>Statement Period: <strong>${period.statementPeriod}</strong></div>
+          <div>Shift Timings: <strong>${shiftPolicy.workStartTime} – ${shiftPolicy.workEndTime} (Grace: ${shiftPolicy.graceTime})</strong></div>
+          <div>Print Date: <strong>${period.printDate}</strong></div>
+        </td>
+      </tr>
+    </table>
+
+    <div class="header-rule"></div>
+
+    <!-- Employee Meta Bar -->
+    <div class="employee-bar">
+      <div class="emp-item">
+        <span class="emp-label">Staff ID</span>
+        <span class="emp-val highlight">${employee.employeeId}</span>
+      </div>
+      <div class="emp-item">
+        <span class="emp-label">Employee Name</span>
+        <span class="emp-val">${employee.name}</span>
+      </div>
+      <div class="emp-item">
+        <span class="emp-label">Designation / Role</span>
+        <span class="emp-val">${employee.designation}</span>
+      </div>
+      <div class="emp-item">
+        <span class="emp-label">Department</span>
+        <span class="emp-val">${employee.department}</span>
+      </div>
+      <div class="emp-item">
+        <span class="emp-label">Assigned Branch</span>
+        <span class="emp-val">${employee.branch}</span>
+      </div>
+      <div class="emp-item">
+        <span class="emp-label">Date of Joining</span>
+        <span class="emp-val">${employee.dateOfJoining}</span>
+      </div>
+    </div>
+
+    <!-- 6 KPI Metric Boxes -->
+    <div class="metrics-grid">
+      <div class="kpi-card">
+        <span class="kpi-title">Days in Month</span>
+        <span class="kpi-number kpi-days">${metrics.daysInMonth}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Days Present</span>
+        <span class="kpi-number kpi-present">${metrics.daysPresent}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Late Arrivals</span>
+        <span class="kpi-number kpi-late">${metrics.lateArrivalsText}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Casual Leaves Taken</span>
+        <span class="kpi-number kpi-casual">${metrics.casualLeavesText}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Permission Used</span>
+        <span class="kpi-number kpi-permission">${metrics.permissionUsedText}</span>
+      </div>
+      <div class="kpi-card">
+        <span class="kpi-title">Loss of Pay (LOP)</span>
+        <span class="kpi-number kpi-lop">${metrics.lopText}</span>
+      </div>
+    </div>
+
+    <!-- Main Table -->
+    <table class="audit-table">
+      <thead>
+        <tr>
+          <th class="center">DAY</th>
+          <th>DATE &amp; WEEKDAY</th>
+          <th>SHIFT TIMINGS</th>
+          <th class="center">CHECK-IN (IST)</th>
+          <th class="center">CHECK-OUT (IST)</th>
+          <th class="center">DURATION</th>
+          <th class="center">STATUS / POLICY</th>
+          <th>LOCATION / BIOMETRIC PUNCH TERMINAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rowsHtml}
+      </tbody>
+    </table>
+
+    <!-- Footer -->
+    <div class="report-footer">
+      <div class="footer-left">
+        <div><strong>WeGrow HR &amp; Biometric Compliance Directorate</strong></div>
+        <div>Employee Attendance Statement • Computer generated with cryptographic record audit</div>
+        <div>Policy rules: Shift ${shiftPolicy.workStartTime} – ${shiftPolicy.workEndTime} (Grace: ${shiftPolicy.graceTime}). Max ${shiftPolicy.allowedLateCheckins} late arrivals / ${shiftPolicy.maxMonthlyPermissionHours}.0h permission per month.</div>
+      </div>
+      <div class="footer-right">
+        HR Directorate / Branch Head
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+  }
+
+  // 25. BULK MONTHLY REPORT (All Employees / Branch / Department)
+  async getBulkMonthlyReport(month?: number, year?: number, branch?: string, department?: string) {
+    const userQuery: any = { isActive: true };
+    if (branch && branch !== 'ALL') {
+      userQuery.branch = branch;
+    }
+    if (department && department !== 'ALL') {
+      userQuery.department = department;
+    }
+
+    const users = await this.userModel.find(userQuery).sort({ branch: 1, name: 1 }).exec();
+
+    const reports = await Promise.all(
+      users.map(async (u) => {
+        try {
+          return await this.getIndividualMonthlyReport(u._id.toString(), month, year);
+        } catch (e) {
+          return null;
+        }
+      }),
+    );
+
+    const validReports = reports.filter((r) => r !== null);
+
+    return {
+      success: true,
+      count: validReports.length,
+      branch: branch || 'ALL',
+      department: department || 'ALL',
+      reports: validReports,
+    };
+  }
+
+  // 26. BULK HTML REPORT GENERATOR
+  generateBulkReportHtml(bulkData: any): string {
+    const reports = bulkData.reports || [];
+    if (reports.length === 0) {
+      return `<!DOCTYPE html><html><body><h2>No employee reports found for the selected filter.</h2></body></html>`;
+    }
+
+    const firstReport = reports[0];
+    const period = firstReport.period;
+
+    const reportsHtml = reports
+      .map((r: any, idx: number) => {
+        const { employee, metrics, shiftPolicy, days } = r;
+        const rowsHtml = days
+          .map(
+            (d: any) => `
+            <tr class="${d.isSunday ? 'row-sunday' : ''}">
+              <td class="col-day">${d.day}</td>
+              <td class="col-date">${d.dateAndWeekday}</td>
+              <td class="col-shift">${d.shiftTimings}</td>
+              <td class="col-time">${d.checkIn}</td>
+              <td class="col-time">${d.checkOut}</td>
+              <td class="col-duration">${d.duration}</td>
+              <td class="col-status"><span class="badge ${d.badgeClass}">${d.status}</span></td>
+              <td class="col-location">${d.locationTerminal}</td>
+            </tr>`,
+          )
+          .join('\n');
+
+        return `
+        <div class="report-card ${idx > 0 ? 'page-break-before' : ''}">
+          <!-- Header -->
+          <table class="header-table">
+            <tr>
+              <td style="vertical-align: top;">
+                <div class="org-title">WEGROW SKILL CAMPUS</div>
+                <div class="report-subtitle">INDIVIDUAL MONTHLY ATTENDANCE &amp; BIOMETRIC AUDIT LOG</div>
+              </td>
+              <td class="header-meta" style="vertical-align: top;">
+                <div>Statement Period: <strong>${period.statementPeriod}</strong></div>
+                <div>Shift Timings: <strong>${shiftPolicy.workStartTime} – ${shiftPolicy.workEndTime} (Grace: ${shiftPolicy.graceTime})</strong></div>
+                <div>Print Date: <strong>${period.printDate}</strong></div>
+              </td>
+            </tr>
+          </table>
+
+          <div class="header-rule"></div>
+
+          <!-- Employee Meta Bar -->
+          <div class="employee-bar">
+            <div class="emp-item">
+              <span class="emp-label">Staff ID</span>
+              <span class="emp-val highlight">${employee.employeeId}</span>
+            </div>
+            <div class="emp-item">
+              <span class="emp-label">Employee Name</span>
+              <span class="emp-val">${employee.name}</span>
+            </div>
+            <div class="emp-item">
+              <span class="emp-label">Designation / Role</span>
+              <span class="emp-val">${employee.designation}</span>
+            </div>
+            <div class="emp-item">
+              <span class="emp-label">Department</span>
+              <span class="emp-val">${employee.department}</span>
+            </div>
+            <div class="emp-item">
+              <span class="emp-label">Assigned Branch</span>
+              <span class="emp-val">${employee.branch}</span>
+            </div>
+            <div class="emp-item">
+              <span class="emp-label">Date of Joining</span>
+              <span class="emp-val">${employee.dateOfJoining}</span>
+            </div>
+          </div>
+
+          <!-- 6 KPI Metric Boxes -->
+          <div class="metrics-grid">
+            <div class="kpi-card">
+              <span class="kpi-title">Days in Month</span>
+              <span class="kpi-number kpi-days">${metrics.daysInMonth}</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">Days Present</span>
+              <span class="kpi-number kpi-present">${metrics.daysPresent}</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">Late Arrivals</span>
+              <span class="kpi-number kpi-late">${metrics.lateArrivalsText}</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">Casual Leaves Taken</span>
+              <span class="kpi-number kpi-casual">${metrics.casualLeavesText}</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">Permission Used</span>
+              <span class="kpi-number kpi-permission">${metrics.permissionUsedText}</span>
+            </div>
+            <div class="kpi-card">
+              <span class="kpi-title">Loss of Pay (LOP)</span>
+              <span class="kpi-number kpi-lop">${metrics.lopText}</span>
+            </div>
+          </div>
+
+          <!-- Main Table -->
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th class="center">DAY</th>
+                <th>DATE &amp; WEEKDAY</th>
+                <th>SHIFT TIMINGS</th>
+                <th class="center">CHECK-IN (IST)</th>
+                <th class="center">CHECK-OUT (IST)</th>
+                <th class="center">DURATION</th>
+                <th class="center">STATUS / POLICY</th>
+                <th>LOCATION / BIOMETRIC PUNCH TERMINAL</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+
+          <!-- Footer -->
+          <div class="report-footer">
+            <div class="footer-left">
+              <div><strong>WeGrow HR &amp; Biometric Compliance Directorate</strong></div>
+              <div>Employee Attendance Statement • Computer generated with cryptographic record audit</div>
+              <div>Policy rules: Shift ${shiftPolicy.workStartTime} – ${shiftPolicy.workEndTime} (Grace: ${shiftPolicy.graceTime}). Max ${shiftPolicy.allowedLateCheckins} late arrivals / ${shiftPolicy.maxMonthlyPermissionHours}.0h permission per month.</div>
+            </div>
+            <div class="footer-right">
+              HR Directorate / Branch Head
+            </div>
+          </div>
+        </div>`;
+      })
+      .join('\n');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk_Monthly_Attendance_Report_${period.monthName}_${period.year}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary-navy: #0b1f3a;
+      --navy-light: #1e293b;
+      --primary-orange: #ea580c;
+      --orange-light: #ffedd5;
+      --text-dark: #0f172a;
+      --text-muted: #64748b;
+      --border-color: #e2e8f0;
+      --bg-slate: #f8fafc;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--text-dark);
+      background-color: #f1f5f9;
+      font-size: 11px;
+      line-height: 1.4;
+      padding: 20px;
+    }
+
+    .report-card {
+      max-width: 1200px;
+      margin: 0 auto 30px auto;
+      background: #ffffff;
+      padding: 24px 28px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      border-radius: 6px;
+    }
+
+    .page-break-before {
+      page-break-before: always;
+      break-before: page;
+    }
+
+    .no-print-toolbar {
+      max-width: 1200px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #ffffff;
+      padding: 12px 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+    }
+
+    .btn-primary { background: #ea580c; color: #ffffff; }
+    .btn-secondary { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; }
+
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+    .org-title { font-size: 18px; font-weight: 800; color: var(--primary-navy); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 3px; }
+    .report-subtitle { font-size: 11px; font-weight: 700; color: var(--primary-orange); letter-spacing: 0.5px; text-transform: uppercase; }
+    .header-meta { text-align: right; font-size: 11px; color: #475569; line-height: 1.5; }
+    .header-meta strong { color: var(--text-dark); font-weight: 600; }
+    .header-rule { height: 3px; background: linear-gradient(90deg, #ea580c 0%, #f97316 100%); margin-bottom: 14px; border-radius: 2px; }
+
+    .employee-bar {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      background: var(--bg-slate);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 10px 14px;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .emp-item { display: flex; flex-direction: column; gap: 2px; }
+    .emp-label { font-size: 9px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.3px; }
+    .emp-val { font-size: 11px; font-weight: 700; color: var(--primary-navy); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .emp-val.highlight { color: var(--primary-orange); }
+
+    .metrics-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 14px; }
+    .kpi-card { background: #ffffff; border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 10px; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+    .kpi-title { font-size: 9px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.3px; margin-bottom: 4px; }
+    .kpi-number { font-size: 15px; font-weight: 800; }
+    .kpi-days { color: var(--text-dark); }
+    .kpi-present { color: #059669; }
+    .kpi-late { color: #ea580c; }
+    .kpi-casual { color: #2563eb; }
+    .kpi-permission { color: #7c3aed; }
+    .kpi-lop { color: #dc2626; }
+
+    .audit-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    .audit-table th { background: var(--primary-navy); color: #ffffff; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; padding: 7px 6px; text-align: left; border: 1px solid #0f2a4f; }
+    .audit-table th.center { text-align: center; }
+    .audit-table td { padding: 5.5px 6px; font-size: 10.5px; border: 1px solid #e2e8f0; color: var(--text-dark); vertical-align: middle; }
+    .audit-table tbody tr:nth-child(even) { background-color: #fafbfd; }
+    .audit-table tbody tr.row-sunday { background-color: #f8fafc; }
+
+    .col-day { text-align: center; font-weight: 700; width: 32px; color: #334155; }
+    .col-date { width: 125px; font-weight: 600; color: #1e293b; }
+    .col-shift { width: 145px; font-size: 10px; color: #64748b; }
+    .col-time { text-align: center; width: 85px; font-weight: 500; color: #334155; }
+    .col-duration { text-align: center; width: 65px; font-weight: 600; color: #0f172a; }
+    .col-status { text-align: center; width: 140px; }
+    .col-location { font-size: 10px; color: #475569; }
+
+    .badge { display: inline-block; padding: 2.5px 7px; border-radius: 4px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap; }
+    .badge-absent { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+    .badge-sunday { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+    .badge-shift_out { background: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
+    .badge-scheduled { background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; }
+    .badge-present { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+    .badge-late { background: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
+    .badge-leave { background: #dbeafe; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .badge-halfday { background: #fef08a; color: #854d0e; border: 1px solid #fde047; }
+
+    .report-footer { display: flex; justify-content: space-between; align-items: flex-end; padding-top: 10px; border-top: 1px solid var(--border-color); font-size: 9.5px; color: #64748b; }
+    .footer-left { line-height: 1.5; }
+    .footer-left strong { color: var(--text-dark); font-weight: 700; }
+    .footer-right { text-align: right; font-weight: 700; color: var(--primary-navy); padding-top: 25px; border-top: 1px solid #94a3b8; min-width: 200px; }
+
+    @media print {
+      @page {
+        size: A4 landscape;
+        margin: 8mm 6mm;
+      }
+
+      body {
+        background: #ffffff !important;
+        padding: 0 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+
+      .no-print, .no-print-toolbar { display: none !important; }
+      .report-card { padding: 0 !important; box-shadow: none !important; border-radius: 0 !important; margin-bottom: 0 !important; }
+      .audit-table th { background: #0b1f3a !important; color: #ffffff !important; }
+      tr { page-break-inside: avoid; }
+      .page-break-before { page-break-before: always; break-before: page; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print-toolbar no-print">
+    <div>
+      <span style="font-weight: 700; color: #0f172a; font-size: 13px;">Bulk Attendance Statement (${reports.length} Employees)</span>
+      <span style="color: #64748b; font-size: 12px; margin-left: 10px;">${period.statementPeriod}</span>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button onclick="window.print()" class="btn btn-primary">🖨️ Print All / Save as PDF</button>
+      <button onclick="window.close()" class="btn btn-secondary">Close</button>
+    </div>
+  </div>
+
+  ${reportsHtml}
+</body>
+</html>`;
+  }
 }
+

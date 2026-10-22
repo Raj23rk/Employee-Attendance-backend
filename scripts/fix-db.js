@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 
 const userCredentials = [
-  { email: 'ak45ashokkumar@gmail.com', password: 'WG@Aka5#Rx93' },
+  { email: 'ak45ashokkumar@gmail.com', password: 'Ashok@4577' },
+  { email: 'www.shiekabdulla78@gmail.com', password: 'Shiek@26' },
   { email: 'srisaigopi31@gmail.com', password: '12345678' },
   { email: 'kumarrk23dev@gmail.com', password: 'WG@Kum2$Yx85' },
   { email: 'mkrv0617@gmail.com', password: 'MkRv@0617' },

@@ -4,10 +4,10 @@ const bcrypt = require('bcrypt');
 
 const userCredentials = [
   { email: 'vijay909232@gmail.com', employeeId: 'WG-EMP-023', password: 'Vijay@2004' },
-  { email: 'www.shiekabdulla78@gmail.com', employeeId: 'WG-EMP-022', password: 'WG@Shi5#Qx72' },
+  { email: 'www.shiekabdulla78@gmail.com', employeeId: 'WG-EMP-022', password: 'Shiek@26' },
   { email: 'dr.thavabalan@gmail.com', employeeId: 'WG26001', password: 'WG@Tha7!Nx58' },
   { email: 'lakshmipriya@psr.edu.in', employeeId: 'WG26002', password: 'WG@Lak5$Rt39' },
-  { email: 'ak45ashokkumar@gmail.com', password: 'WG@Aka5#Rx93' },
+  { email: 'ak45ashokkumar@gmail.com', password: 'Ashok@4577' },
   { email: 'srisaigopi31@gmail.com', password: '12345678' },
   { email: 'kumarrk23dev@gmail.com', password: 'Raj@2310' },
   { email: 'mkrv0617@gmail.com', password: 'MkRv@0617' },

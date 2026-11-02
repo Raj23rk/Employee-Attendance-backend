@@ -47,4 +47,8 @@ export class UpdateTaskStatusDto {
   @IsNotEmpty()
   @IsEnum(TaskStatus)
   status: TaskStatus;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

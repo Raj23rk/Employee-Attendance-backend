@@ -29,6 +29,26 @@ export class Task {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdById: MongooseSchema.Types.ObjectId;
+
+  @Prop({
+    type: [
+      {
+        status: { type: String, required: true },
+        changedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+        changedByName: { type: String },
+        changedAt: { type: Date, default: Date.now },
+        note: { type: String },
+      },
+    ],
+    default: [],
+  })
+  statusHistory?: {
+    status: string;
+    changedBy?: any;
+    changedByName?: string;
+    changedAt?: Date;
+    note?: string;
+  }[];
 }
 
 export const TaskSchema = SchemaFactory.createForClass(Task);

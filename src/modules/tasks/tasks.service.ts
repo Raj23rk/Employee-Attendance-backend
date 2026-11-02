@@ -115,6 +115,15 @@ export class TasksService {
       dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
       assigneeId: targetAssigneeId,
       createdById: new Types.ObjectId(creatorId),
+      statusHistory: [
+        {
+          status: TaskStatus.TODO,
+          changedBy: new Types.ObjectId(creatorId),
+          changedByName: creatorName,
+          changedAt: new Date(),
+          note: 'Task created and initialized in To Do (Level 1)',
+        },
+      ],
     });
 
     const populatedTask = await this.taskModel
@@ -177,7 +186,27 @@ export class TasksService {
       throw new NotFoundException('Task not found');
     }
 
+    const previousStatus = task.status;
     task.status = dto.status;
+
+    let userName = 'Staff Member';
+    try {
+      const user = await this.userModel.findById(userId);
+      if (user?.name) userName = user.name;
+    } catch {}
+
+    if (!Array.isArray(task.statusHistory)) {
+      task.statusHistory = [];
+    }
+
+    task.statusHistory.push({
+      status: dto.status,
+      changedBy: isValidObjectId(userId) ? new Types.ObjectId(userId) : undefined,
+      changedByName: userName,
+      changedAt: new Date(),
+      note: dto.note || `Status advanced from ${previousStatus} to ${dto.status}`,
+    });
+
     await task.save();
 
     const populatedTask = await this.taskModel
@@ -186,7 +215,23 @@ export class TasksService {
       .populate('assigneeId', 'name email employeeId department designation')
       .exec();
 
-    return { success: true, message: 'Task status updated', data: populatedTask };
+    // Dispatch in-app notification if status advanced
+    try {
+      const creatorIdStr = String(task.createdById);
+      const assigneeIdStr = String(task.assigneeId);
+      const recipientId = userId === creatorIdStr ? assigneeIdStr : creatorIdStr;
+      if (recipientId && recipientId !== userId) {
+        await this.notificationsService.createInAppNotification(
+          recipientId,
+          `Task "${task.title}" updated to ${dto.status}`,
+          `${userName} moved task "${task.title}" from ${previousStatus} to ${dto.status}.`,
+          'INFO',
+          '/tasks',
+        );
+      }
+    } catch {}
+
+    return { success: true, message: `Task status updated to ${dto.status}`, data: populatedTask };
   }
 }
 

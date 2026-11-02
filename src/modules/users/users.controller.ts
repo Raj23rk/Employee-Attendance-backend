@@ -157,6 +157,16 @@ export class UsersController {
     return this.usersService.updatePasswordDirect(dto, id);
   }
 
+  @Put(':id')
+  @Roles(Role.ADMIN, Role.HR, Role.MANAGER, Role.CEO)
+  @ApiOperation({ summary: 'Admin / HR / Manager / CEO update employee details and shift timings' })
+  async updateEmployee(
+    @Param('id') id: string,
+    @Body() dto: any,
+  ) {
+    return this.usersService.updateEmployee(id, dto);
+  }
+
   @Delete(':id')
   @Roles(Role.ADMIN, Role.HR, Role.CEO)
   @ApiOperation({ summary: 'Delete employee account and their leave records' })

@@ -259,6 +259,34 @@ export class UsersService {
     };
   }
 
+  async updateEmployee(id: string, dto: any) {
+    const user = await this.userModel.findById(id);
+    if (!user) {
+      throw new NotFoundException('Employee not found');
+    }
+    const updateData: any = { ...dto };
+    delete updateData.password;
+    delete updateData._id;
+
+    if (dto.dateOfJoining) {
+      updateData.dateOfJoining = new Date(dto.dateOfJoining);
+    }
+    if (dto.dateOfBirth) {
+      updateData.dateOfBirth = new Date(dto.dateOfBirth);
+    }
+
+    const updated = await this.userModel
+      .findByIdAndUpdate(id, { $set: updateData }, { new: true })
+      .select('-password')
+      .lean();
+
+    return {
+      success: true,
+      message: `Employee ${updated?.name || user.name} updated successfully`,
+      data: updated,
+    };
+  }
+
   async delete(id: string, currentUserId: string) {
     if (id === currentUserId) {
       throw new BadRequestException('You cannot delete your own logged-in account');

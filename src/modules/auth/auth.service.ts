@@ -91,6 +91,9 @@ export class AuthService {
         department: user.department,
         designation: user.designation,
         managerId: user.managerId,
+        shiftStartTime: user.shiftStartTime || '09:40',
+        shiftEndTime: user.shiftEndTime || '19:00',
+        gracePeriodMinutes: user.gracePeriodMinutes ?? 5,
       },
     };
   }

@@ -51,6 +51,16 @@ export class CreateUserDto {
   @IsString()
   designation?: string;
 
+  @IsOptional()
+  @IsString()
+  shiftStartTime?: string;
+
+  @IsOptional()
+  @IsString()
+  shiftEndTime?: string;
+
+  @IsOptional()
+  gracePeriodMinutes?: number;
 
   @IsOptional()
   @IsString()

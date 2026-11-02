@@ -72,6 +72,8 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Sivakasi Branch 1.0',
     baseSalary: 14000,
     dateOfJoining: '2026-09-16',
+    shiftStartTime: '10:00',
+    shiftEndTime: '20:00',
   },
   {
     name: 'MUTHUSELVI P',
@@ -82,6 +84,8 @@ const staffData = [
     branch: 'WeGrow B School – Sivakasi Branch 3.0',
     baseSalary: 14000,
     dateOfJoining: '2026-05-16',
+    shiftStartTime: '09:40',
+    shiftEndTime: '19:00',
   },
   {
     name: 'NANDHAKUMAR E',
@@ -92,6 +96,8 @@ const staffData = [
     branch: 'WeGrow B School – Sivakasi Branch 3.0',
     baseSalary: 5000,
     dateOfJoining: '2026-01-01',
+    shiftStartTime: '17:00',
+    shiftEndTime: '21:00',
   },
   {
     name: 'Dr.Pandiselvam P',
@@ -102,6 +108,8 @@ const staffData = [
     branch: 'WeGrow B School – Sivakasi Branch 3.0',
     baseSalary: 8000,
     dateOfJoining: '2026-09-28',
+    shiftStartTime: '18:30',
+    shiftEndTime: '21:00',
   },
   {
     name: 'RAJAVALLI K',
@@ -172,6 +180,8 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Sivakasi Branch 1.0',
     baseSalary: 12000,
     dateOfJoining: '2026-10-05',
+    shiftStartTime: '09:40',
+    shiftEndTime: '19:30',
   },
 
   // Srivilliputhur Branch
@@ -184,6 +194,8 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Srivilliputhur Branch 2.0',
     baseSalary: 12000,
     dateOfJoining: '2026-07-10',
+    shiftStartTime: '09:40',
+    shiftEndTime: '17:40',
   },
   {
     name: 'PRABHAKARAN',
@@ -194,6 +206,8 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Srivilliputhur Branch 2.0',
     baseSalary: 5500,
     dateOfJoining: '2026-09-03',
+    shiftStartTime: '18:00',
+    shiftEndTime: '21:00',
   },
   {
     name: 'SUJATHA',
@@ -204,6 +218,8 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Srivilliputhur Branch 2.0',
     baseSalary: 10000,
     dateOfJoining: '2026-07-13',
+    shiftStartTime: '10:00',
+    shiftEndTime: '13:00',
   },
   {
     name: 'UMARANI M.s',
@@ -214,6 +230,8 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Srivilliputhur Branch 2.0',
     baseSalary: 19000,
     dateOfJoining: '2026-06-15',
+    shiftStartTime: '09:40',
+    shiftEndTime: '19:00',
   },
   {
     name: 'VIGNESH A',
@@ -224,16 +242,19 @@ const staffData = [
     branch: 'WeGrow Skill Campus – Srivilliputhur Branch 2.0',
     baseSalary: 20000,
     dateOfJoining: '2025-12-22',
+    shiftStartTime: '09:40',
+    shiftEndTime: '19:00',
   },
   {
     name: 'NAVEEN M',
     email: 'navenn919@gmail.com',
     phone: '9345758711',
     role: 'EMPLOYEE',
-    designation: 'Staff',
+    designation: 'Staff (Removed)',
     branch: 'WeGrow Skill Campus – Srivilliputhur Branch 2.0',
     baseSalary: 12000,
     dateOfJoining: '2026-06-16',
+    isActive: false,
   },
 ];
 
@@ -300,6 +321,10 @@ async function run() {
           designation: item.designation,
           branch: item.branch,
           dateOfJoining: new Date(item.dateOfJoining),
+          shiftStartTime: item.shiftStartTime || '09:40',
+          shiftEndTime: item.shiftEndTime || '19:00',
+          gracePeriodMinutes: 5,
+          ...(item.isActive !== undefined ? { isActive: item.isActive } : {}),
         },
       }
     );

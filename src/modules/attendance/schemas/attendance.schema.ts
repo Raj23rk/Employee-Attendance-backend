@@ -83,9 +83,15 @@ export class Attendance {
   checkOutLocation?: LocationDetails;
 
   // Late Arrival & Grace Policy Tracking
-  // Rule: Normal checkin 9:40 AM, Grace 9:45 AM. 3 late check-ins allowed per month. 4th time half day salary deduction.
+  // Rule: Individual shift timing with 5-minute grace window. Grace allowed 3 times per month. 4th time or beyond grace is late.
   @Prop({ default: false })
   isLate: boolean;
+
+  @Prop({ default: false })
+  isGraceCheckIn: boolean;
+
+  @Prop({ default: 0 })
+  graceCountThisMonth: number;
 
   @Prop({ default: 0 })
   lateMinutes: number;
@@ -98,6 +104,12 @@ export class Attendance {
 
   @Prop({ default: 'NONE', enum: ['NONE', 'HALF_DAY_DEDUCTION', 'FULL_DAY_DEDUCTION'] })
   latePenaltyType: string;
+
+  @Prop({ default: '' })
+  shiftStartTime?: string;
+
+  @Prop({ default: '' })
+  shiftEndTime?: string;
 
   @Prop({ default: '' })
   ipAddress?: string;

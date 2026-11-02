@@ -64,6 +64,15 @@ export class User {
   @Prop({ default: 'Staff' })
   designation: string;
 
+  @Prop({ default: '09:40' })
+  shiftStartTime: string;
+
+  @Prop({ default: '19:00' })
+  shiftEndTime: string;
+
+  @Prop({ default: 5 })
+  gracePeriodMinutes: number;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   managerId?: MongooseSchema.Types.ObjectId | null;
 

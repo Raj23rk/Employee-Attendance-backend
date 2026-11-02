@@ -141,6 +141,30 @@ export class AttendanceService {
     });
   }
 
+  public formatTimeTo12Hour(timeStr?: string): string {
+    if (!timeStr) return '';
+    if (timeStr.includes('AM') || timeStr.includes('PM')) return timeStr;
+    const [hStr, mStr] = timeStr.split(':');
+    const h = Number(hStr);
+    const m = Number(mStr) || 0;
+    if (isNaN(h)) return timeStr;
+    const period = h >= 12 ? 'PM' : 'AM';
+    const hour12 = h % 12 === 0 ? 12 : h % 12;
+    return `${String(hour12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${period}`;
+  }
+
+  public calculateGraceTime(timeStr: string, graceMinutes: number = 5): string {
+    if (!timeStr) return '09:45';
+    const cleanTime = timeStr.replace(/[^0-9:]/g, '');
+    const [hStr, mStr] = cleanTime.split(':');
+    const h = Number(hStr) || 9;
+    const m = Number(mStr) || 40;
+    const totalMins = h * 60 + m + graceMinutes;
+    const newH = Math.floor(totalMins / 60) % 24;
+    const newM = totalMins % 60;
+    return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+  }
+
   // Helper: Find Nearest Branch & Check Geofence
   private async resolveLocationAndBranch(
     latitude?: number,
@@ -250,7 +274,13 @@ export class AttendanceService {
       });
     }
 
-    // Evaluate Late Arrival (Past 09:40 AM)
+    // User's Individual Shift Schedule
+    const userShiftStart = (user && (user as any).shiftStartTime) || policy.workStartTime || '09:40';
+    const userShiftEnd = (user && (user as any).shiftEndTime) || policy.workEndTime || '19:00';
+    const graceMinutes = (user && (user as any).gracePeriodMinutes != null)
+      ? (user as any).gracePeriodMinutes
+      : (policy.gracePeriodMinutes || 5);
+
     // Convert current time to today's HH:mm in Asia/Kolkata timezone
     const istTimeStr = now.toLocaleTimeString('en-GB', {
       timeZone: 'Asia/Kolkata',
@@ -261,46 +291,97 @@ export class AttendanceService {
     const [currentHours, currentMinutes] = istTimeStr.split(':').map(Number);
     const currentTotalMinutes = currentHours * 60 + currentMinutes;
 
-    const [startH, startM] = (policy.workStartTime || '09:40').split(':').map(Number);
-    const shiftStartTotalMinutes = (startH || 9) * 60 + (startM || 40); // 580 minutes = 9:40 AM
-
-    const [graceH, graceM] = (policy.graceTime || '09:45').split(':').map(Number);
-    const graceTotalMinutes = (graceH || 9) * 60 + (graceM || 45); // 585 minutes = 9:45 AM
+    const [startH, startM] = userShiftStart.split(':').map(Number);
+    const shiftStartTotalMinutes = (startH || 0) * 60 + (startM || 0);
+    const shiftGraceTotalMinutes = shiftStartTotalMinutes + graceMinutes;
 
     let isLate = false;
+    let isGraceCheckIn = false;
+    let graceCountThisMonth = 0;
     let lateMinutes = 0;
     let isLatePenaltyApplied = false;
     let latePenaltyType = 'NONE';
     let status = AttendanceStatus.PRESENT;
     let lateCountThisMonth = 0;
 
-    if (currentTotalMinutes > shiftStartTotalMinutes) {
-      isLate = true;
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
+    const monthStartStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
+    const monthEndStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+
+    // 1. On-time check-in (at or before scheduled shift start time)
+    if (currentTotalMinutes <= shiftStartTotalMinutes) {
+      isLate = false;
+      lateMinutes = 0;
+      isGraceCheckIn = false;
+      status = AttendanceStatus.PRESENT;
+    }
+    // 2. Check-in within 5-minute grace window (e.g. shift 10:00 -> 10:01 to 10:05)
+    else if (currentTotalMinutes <= shiftGraceTotalMinutes) {
       lateMinutes = currentTotalMinutes - shiftStartTotalMinutes;
 
-      // Count late arrivals for this user in current calendar month
-      const currentYear = now.getFullYear();
-      const currentMonth = now.getMonth() + 1;
-      const monthStartStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-      const monthEndStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+      // Count grace check-ins used this month
+      const previousGraceCount = await this.attendanceModel.countDocuments({
+        userId: new Types.ObjectId(userId),
+        date: { $gte: monthStartStr, $lte: monthEndStr, $ne: today },
+        isGraceCheckIn: true,
+      });
+
+      graceCountThisMonth = previousGraceCount + 1;
+
+      // Allowed up to 3 times per month without being marked late
+      if (graceCountThisMonth <= (policy.allowedLateCheckins || 3)) {
+        isGraceCheckIn = true;
+        isLate = false;
+        status = AttendanceStatus.PRESENT;
+      } else {
+        // Exceeded 3 allowed grace check-ins: automatically marked as late and increases late count
+        isGraceCheckIn = false;
+        isLate = true;
+
+        const previousLateCount = await this.attendanceModel.countDocuments({
+          userId: new Types.ObjectId(userId),
+          date: { $gte: monthStartStr, $lte: monthEndStr, $ne: today },
+          isLate: true,
+        });
+        lateCountThisMonth = previousLateCount + 1;
+
+        if (lateCountThisMonth > (policy.allowedLateCheckins || 3)) {
+          isLatePenaltyApplied = true;
+          latePenaltyType = 'HALF_DAY_DEDUCTION';
+          status = AttendanceStatus.HALF_DAY;
+        }
+      }
+    }
+    // 3. Check-in past grace window (> 5 mins past scheduled shift start time)
+    else {
+      isLate = true;
+      isGraceCheckIn = false;
+      lateMinutes = currentTotalMinutes - shiftStartTotalMinutes;
 
       const previousLateCount = await this.attendanceModel.countDocuments({
         userId: new Types.ObjectId(userId),
         date: { $gte: monthStartStr, $lte: monthEndStr, $ne: today },
         isLate: true,
       });
-
       lateCountThisMonth = previousLateCount + 1;
 
-      // Rule: Up to 3 late check-ins allowed (grace / warning).
-      // 4th late check-in and onward -> Half-day salary deducted.
-      const allowedLate = policy.allowedLateCheckins || 3;
-      if (lateCountThisMonth > allowedLate) {
+      if (lateCountThisMonth > (policy.allowedLateCheckins || 3)) {
         isLatePenaltyApplied = true;
         latePenaltyType = 'HALF_DAY_DEDUCTION';
-        status = AttendanceStatus.HALF_DAY; // Automatically marked as half-day due to 4th late check-in
+        status = AttendanceStatus.HALF_DAY;
       }
     }
+
+    const defaultNotes = isLatePenaltyApplied
+      ? '4th Late check-in this month: Half-Day salary deduction applied'
+      : isLate
+        ? (graceCountThisMonth > 3
+            ? `Late check-in (3/3 grace used up; late arrival #${lateCountThisMonth})`
+            : `Late check-in (${lateMinutes}m late. Late arrival #${lateCountThisMonth}/${policy.allowedLateCheckins || 3} allowed)`)
+        : isGraceCheckIn
+          ? `On-time check-in (Grace used: ${graceCountThisMonth}/3 allowed)`
+          : 'On-time check-in';
 
     if (!record) {
       record = new this.attendanceModel({
@@ -319,11 +400,15 @@ export class AttendanceService {
         branchId: locationData.branchId as any,
         checkInLocation: locationData,
         isLate,
+        isGraceCheckIn,
+        graceCountThisMonth,
         lateMinutes,
         lateCountThisMonth,
         isLatePenaltyApplied,
         latePenaltyType,
-        notes: dto.notes || (isLatePenaltyApplied ? '4th Late check-in this month: Half-Day salary deduction applied' : isLate ? `Late check-in (${lateCountThisMonth}/${policy.allowedLateCheckins || 3} allowed grace)` : 'On-time check-in'),
+        shiftStartTime: userShiftStart,
+        shiftEndTime: userShiftEnd,
+        notes: dto.notes || defaultNotes,
         ipAddress,
       });
     } else {
@@ -340,11 +425,15 @@ export class AttendanceService {
       record.checkInLocation = locationData;
 
       record.isLate = isLate;
+      record.isGraceCheckIn = isGraceCheckIn;
+      record.graceCountThisMonth = graceCountThisMonth;
       record.lateMinutes = lateMinutes;
       record.lateCountThisMonth = lateCountThisMonth;
       record.isLatePenaltyApplied = isLatePenaltyApplied;
       record.latePenaltyType = latePenaltyType;
-      record.notes = dto.notes || record.notes;
+      record.shiftStartTime = userShiftStart;
+      record.shiftEndTime = userShiftEnd;
+      record.notes = dto.notes || defaultNotes;
       record.ipAddress = ipAddress;
     }
 
@@ -355,8 +444,10 @@ export class AttendanceService {
       message: isLatePenaltyApplied
         ? `Checked in at ${this.formatTime(now)}. Note: 4th late arrival this month. Half-day salary deduction applied.`
         : isLate
-          ? `Checked in at ${this.formatTime(now)} (Late arrival ${lateCountThisMonth}/3 allowed grace check-ins).`
-          : `Check-in successful at ${this.formatTime(now)}.`,
+          ? `Checked in at ${this.formatTime(now)} (Late arrival #${lateCountThisMonth}/3 allowed grace check-ins).`
+          : isGraceCheckIn
+            ? `Checked in at ${this.formatTime(now)} (Grace period arrival: ${graceCountThisMonth}/3 allowed used).`
+            : `Check-in successful at ${this.formatTime(now)}.`,
       data: {
         id: record._id,
         date: record.date,
@@ -366,9 +457,13 @@ export class AttendanceService {
         formattedTime: this.formatTime(record.checkInTime),
         status: record.status,
         isLate: record.isLate,
+        isGraceCheckIn: (record as any).isGraceCheckIn || false,
+        graceCountThisMonth: (record as any).graceCountThisMonth || 0,
         lateMinutes: record.lateMinutes,
         lateCountThisMonth: record.lateCountThisMonth,
         isLatePenaltyApplied: record.isLatePenaltyApplied,
+        shiftStartTime: (record as any).shiftStartTime || userShiftStart,
+        shiftEndTime: (record as any).shiftEndTime || userShiftEnd,
         branchName: record.branchName,
         checkInLocation: record.checkInLocation,
       },
@@ -410,13 +505,26 @@ export class AttendanceService {
     // Calculate working minutes
     const diffMs = now.getTime() - new Date(record.checkInTime).getTime();
     const totalMinutes = Math.max(0, Math.floor(diffMs / 60000));
-    const workingMinutes = Math.max(0, totalMinutes - (record.breakMinutes || 60));
+
+    const policy = await this.policyModel.findOne({ isActive: true });
+    const userShiftStart = (user && (user as any).shiftStartTime) || (record as any).shiftStartTime || policy?.workStartTime || '09:40';
+    const userShiftEnd = (user && (user as any).shiftEndTime) || (record as any).shiftEndTime || policy?.workEndTime || '19:00';
+    const [startH, startM] = userShiftStart.split(':').map(Number);
+    const [endH, endM] = userShiftEnd.split(':').map(Number);
+    const scheduledShiftMinutes = Math.max(60, (endH * 60 + (endM || 0)) - (startH * 60 + (startM || 0)));
+
+    // Short / part-time shifts (<= 5 hours / 300 mins) default break to 0; standard full-time shifts default to 60 mins
+    const defaultBreak = scheduledShiftMinutes <= 300 ? 0 : 60;
+    const breakMins = record.breakMinutes !== undefined && record.breakMinutes !== 60 ? record.breakMinutes : defaultBreak;
+    record.breakMinutes = breakMins;
+
+    const workingMinutes = Math.max(0, totalMinutes - breakMins);
     record.totalWorkingMinutes = workingMinutes;
 
-    // Evaluate half day vs full day based on policy unless already marked as half-day from late penalty
-    const policy = await this.policyModel.findOne({ isActive: true });
-    const fullDayThreshold = policy?.fullDayThresholdMinutes || 500;
-    const halfDayThreshold = policy?.halfDayThresholdMinutes || 270;
+    // Evaluate half day vs full day based on scheduled shift duration
+    const netScheduled = Math.max(60, scheduledShiftMinutes - breakMins);
+    const fullDayThreshold = Math.floor(netScheduled * 0.8);
+    const halfDayThreshold = Math.floor(netScheduled * 0.45);
 
     if (!record.isLatePenaltyApplied) {
       if (workingMinutes < halfDayThreshold) {
@@ -458,7 +566,7 @@ export class AttendanceService {
     const startStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
     const endStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
 
-    const [record, policy, monthlyPermissions] = await Promise.all([
+    const [record, policy, monthlyPermissions, user] = await Promise.all([
       this.attendanceModel.findOne({
         userId: new Types.ObjectId(userId),
         date: today,
@@ -469,9 +577,23 @@ export class AttendanceService {
         date: { $gte: startStr, $lte: endStr },
         status: { $in: [PermissionStatus.APPROVED, PermissionStatus.PENDING] },
       }).select('durationHours').lean(),
+      this.userModel.findById(userId).lean(),
     ]);
 
     const shiftPolicy = policy.data;
+    const userStartTime = (user && (user as any).shiftStartTime) || (record as any)?.shiftStartTime || shiftPolicy?.workStartTime || '09:40';
+    const userEndTime = (user && (user as any).shiftEndTime) || (record as any)?.shiftEndTime || shiftPolicy?.workEndTime || '19:00';
+    const graceMinutes = (user && (user as any).gracePeriodMinutes != null)
+      ? (user as any).gracePeriodMinutes
+      : (shiftPolicy?.gracePeriodMinutes || 5);
+    const userGraceTime = this.calculateGraceTime(userStartTime, graceMinutes);
+
+    const userShiftDetails = {
+      startTime: this.formatTimeTo12Hour(userStartTime),
+      graceTime: this.formatTimeTo12Hour(userGraceTime),
+      endTime: this.formatTimeTo12Hour(userEndTime),
+    };
+
     const usedPermissionHours = monthlyPermissions.reduce((acc: number, p: any) => acc + (p.durationHours || 0), 0);
 
     if (!record || !record.checkInTime) {
@@ -489,11 +611,7 @@ export class AttendanceService {
         elapsed: '00:00:00',
         elapsedFormatted: '00:00:00',
         status: record ? record.status : AttendanceStatus.ABSENT,
-        shiftDetails: {
-          startTime: shiftPolicy?.workStartTime || '09:40 AM',
-          graceTime: shiftPolicy?.graceTime || '09:45 AM',
-          endTime: shiftPolicy?.workEndTime || '07:00 PM',
-        },
+        shiftDetails: userShiftDetails,
         permissionQuota: {
           allowedMonthlyHours: shiftPolicy?.maxMonthlyPermissionHours || 2,
           usedMonthlyHours: usedPermissionHours,
@@ -527,17 +645,15 @@ export class AttendanceService {
       elapsedFormatted,
       status: record.status,
       isLate: record.isLate,
+      isGraceCheckIn: (record as any)?.isGraceCheckIn || false,
+      graceCountThisMonth: (record as any)?.graceCountThisMonth || 0,
       lateMinutes: record.lateMinutes,
       lateCountThisMonth: record.lateCountThisMonth,
       isLatePenaltyApplied: record.isLatePenaltyApplied,
       branchName: record.branchName,
       checkInLocation: record.checkInLocation,
       checkOutLocation: record.checkOutLocation,
-      shiftDetails: {
-        startTime: shiftPolicy?.workStartTime || '09:40 AM',
-        graceTime: shiftPolicy?.graceTime || '09:45 AM',
-        endTime: shiftPolicy?.workEndTime || '07:00 PM',
-      },
+      shiftDetails: userShiftDetails,
       permissionQuota: {
         allowedMonthlyHours: shiftPolicy?.maxMonthlyPermissionHours || 2,
         usedMonthlyHours: usedPermissionHours,
@@ -1530,6 +1646,8 @@ export class AttendanceService {
         phone: u.phone,
         department: u.department,
         avatarUrl: u.avatarUrl,
+        shiftStartTime: (u as any).shiftStartTime || '09:40',
+        shiftEndTime: (u as any).shiftEndTime || '19:00',
       };
 
       // Check if employee has joined before or on queryDate
@@ -1600,6 +1718,8 @@ export class AttendanceService {
 
           if (att.isLate) {
             b.lateCount++;
+            const userShiftStart = (u as any).shiftStartTime || (policy as any).workStartTime || '09:40';
+            const userGrace = this.calculateGraceTime(userShiftStart, (u as any).gracePeriodMinutes ?? ((policy as any).gracePeriodMinutes || 5));
             const lateItem = {
               ...staffInfo,
               checkInTime: checkInTimeFormatted,
@@ -1608,18 +1728,24 @@ export class AttendanceService {
               isLatePenaltyApplied: att.isLatePenaltyApplied || false,
               latePenaltyType: att.latePenaltyType || 'NONE',
               status: 'LATE',
-              shiftTime: (policy as any).workStartTime || '09:40 AM',
-              graceTime: policy.graceTime || '09:45 AM',
+              shiftTime: this.formatTimeTo12Hour(userShiftStart),
+              graceTime: this.formatTimeTo12Hour(userGrace),
             };
             b.lateComers.push(lateItem);
             allLateComers.push(lateItem);
           } else {
             b.onTimeCount++;
+            const userShiftStart = (u as any).shiftStartTime || (policy as any).workStartTime || '09:40';
+            const userGrace = this.calculateGraceTime(userShiftStart, (u as any).gracePeriodMinutes ?? ((policy as any).gracePeriodMinutes || 5));
             const onTimeItem = {
               ...staffInfo,
               checkInTime: checkInTimeFormatted,
               checkOutTime: checkOutTimeFormatted,
               status: 'ON_TIME',
+              isGraceCheckIn: (att as any).isGraceCheckIn || false,
+              graceCountThisMonth: (att as any).graceCountThisMonth || 0,
+              shiftTime: this.formatTimeTo12Hour(userShiftStart),
+              graceTime: this.formatTimeTo12Hour(userGrace),
             };
             b.onTimeList.push(onTimeItem);
             allOnTime.push(onTimeItem);
@@ -1736,9 +1862,14 @@ export class AttendanceService {
         : null,
     ]);
 
-    const shiftStartTime = policyDoc?.workStartTime || '09:40 AM';
-    const graceTime = policyDoc?.graceTime || '09:45 AM';
-    const shiftEndTime = policyDoc?.workEndTime || '07:00 PM';
+    const userShiftStart = (user as any)?.shiftStartTime || policyDoc?.workStartTime || '09:40';
+    const userShiftEnd = (user as any)?.shiftEndTime || policyDoc?.workEndTime || '19:00';
+    const graceMinutes = (user as any)?.gracePeriodMinutes != null ? (user as any).gracePeriodMinutes : (policyDoc?.gracePeriodMinutes || 5);
+    const userGraceTime = this.calculateGraceTime(userShiftStart, graceMinutes);
+
+    const shiftStartTime = this.formatTimeTo12Hour(userShiftStart);
+    const graceTime = this.formatTimeTo12Hour(userGraceTime);
+    const shiftEndTime = this.formatTimeTo12Hour(userShiftEnd);
     const allowedLate = policyDoc?.allowedLateCheckins || 3;
     const maxPermissionHours = policyDoc?.maxMonthlyPermissionHours || 2;
 
